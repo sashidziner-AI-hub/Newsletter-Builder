@@ -199,3 +199,96 @@ text fallback with and without a brand logo; footer brand pull-through and per-e
 override; footer social from brand and overridden; `showFooter` off dropping only the footer;
 `showFooter` defaulting to on for pre-1B designs; repeater add / reorder / remove preserving
 item data; the 10-item cap; and a JSON round trip.
+
+---
+
+## Feature 1C — Starter presets — done (2026-10-29)
+
+"New" used to drop the user on an empty canvas. It now opens a **New email** dialog: a grid
+of Blank plus eight presets, each with a live thumbnail rendered with the active brand.
+
+### What shipped
+
+| Preset | Built from |
+|---|---|
+| **Newsletter** | Header (logo-left + nav), Hero `image-right`, intro Text, Article list `thumb-left` ×3, CTA band, Footer |
+| **Promotional** | Header `logo-center`, Hero `centered` on `brand.secondary`, Heading + Text offer, 2-column feature cards, Button, Divider, Footer |
+| **Product launch** | Header, Hero `cards-3`, Text, full-width Image, Button, Footer |
+| **Welcome** | Header `logo-center`, Hero `centered`, Text with `{{first_name}}`, Article list `text-only` ×3 next steps, Button, Social, Footer |
+| **Cold outreach** | Deliberately plain: no header, no hero, **no images at all**. Greeting, three paragraphs, one Button, signature, minimal footer |
+| *Event invitation* · *Order confirmation* · *Weekly digest* | Ported from the old starters, structure unchanged, hex → `brand.*` tokens |
+
+No new block types. The renderer was not touched.
+
+### Presets superseded the old starters
+
+`src/lib/starters.ts` is **deleted**. It predated 1A and 1B — 35 hardcoded hex values, no
+brand tokens, atomic blocks only — and four of its seven entries clashed by name with the
+presets 1C asked for. `src/lib/presets.ts` replaces it:
+
+```ts
+export interface Preset {
+  id: string; name: string; description: string;
+  build: (brand: Brand) => Design;
+}
+```
+
+The three starters with no 1C counterpart (Event invitation, Order confirmation, Weekly
+digest) were ported rather than dropped, so nothing was lost. The *Starter templates* tab is
+gone from the Templates modal — the New dialog is the single entry point, and *My templates*
+(saved emails) is unchanged. `src/main.tsx` first-run now builds the Welcome preset.
+
+### Two things worth knowing
+
+1. **Colours and fonts are `brand.*` tokens; the brand name is baked in.** Tokens resolve at
+   the render boundary, so a preset keeps re-theming after a later brand switch. The brand
+   *name* is different — `build(brand)` interpolates it into prose once, at apply time,
+   because from then on it is ordinary editable text. So switching brands re-themes the
+   colours but leaves "Welcome to Acme Health" as written. That is deliberate.
+2. **`build()` already returns a fresh copy.** It goes through `createBlock`/`createRow`,
+   which mint ids via `uid()`, so applying a preset twice cannot alias and editing the result
+   cannot reach the preset. No `cloneWithNewIds` was needed. Tested both ways.
+
+### Placeholder-image warning
+
+`auditImageSources()` (`src/lib/audit.ts`) gained a `placeholders` count along
+`embedded`/`insecure`, plus an exported `PLACEHOLDER_PATTERN` / `isPlaceholderImage()`
+covering picsum, placehold.co/it/com, dummyimage and via.placeholder. The export dialog's
+existing amber block now carries a **"Placeholder images still in use"** line, so nobody
+sends a preset unedited. It clears when the URLs are replaced. `ok` is false while any
+placeholder survives.
+
+### Thumbnails
+
+`NewEmailModal.tsx` renders each preset's real exported HTML into a sandboxed, inert
+`<iframe srcDoc>` at 600 px and scales it with a CSS `transform`. The transform is builder
+chrome and never reaches an email, so the no-flex/grid/position rule does not apply there.
+The brand selector in the dialog header re-renders every thumbnail.
+
+### Export sizes (limit 90 KB)
+
+7.9–18.9 KB across all 8 presets × 2 brands. Cold outreach is the smallest at 7.9 KB; the
+largest is Event invitation at 18.9 KB. Zero embedded and zero insecure images throughout.
+
+### Known gaps
+
+- Presets ship with `picsum.photos` art and placeholder copy on purpose; the export warning
+  exists precisely because both must be replaced.
+- The Cold outreach signature names a fictional sender ("Priya Raman") — edit it per send.
+
+### Tests
+
+`src/test/presets.test.ts` (125) plus updates to `src/test/app.test.tsx` and
+`src/test/render.test.ts`. Suite: **266 passing** (was 140), `tsc --noEmit` clean.
+
+Covered per preset × 2 brands: no `display:flex`/`display:grid`/`position:`/`brand.`; every
+image has non-empty alt and a width; every href https or a merge tag; merge tags preserved
+verbatim; export under 90 KB; themed by the brand; `normalizeDesign` round trip. Plus: brand
+switch re-themes every preset while a hex override survives; fresh disjoint ids on every
+apply; editing an applied design leaves `PRESETS` byte-identical; brand name baked at apply
+time; subject and preheader pre-filled; Cold outreach has no images, no header/hero and no
+page frame; and the placeholder audit flags, then clears.
+
+One note on the image assertion: the original **Image block** emits `border:0` in its inline
+style rather than a `border="0"` attribute (only the 1B composite blocks use the attribute).
+The test accepts either, since refactoring that renderer was out of scope.

@@ -171,22 +171,40 @@ describe('App', () => {
     expect(s().design.rows).toHaveLength(1);
   });
 
-  it('starter templates load', () => {
+  it('presets load from the New email dialog', () => {
     render(<App />);
-    fireEvent.click(screen.getByTitle('Templates'));
-    fireEvent.click(screen.getByText('Starter templates'));
-    fireEvent.click(screen.getAllByText('Use this template')[0]);
+    fireEvent.click(screen.getByTitle('New email'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Blank')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByText('Newsletter'));
     expect(s().design.rows.length).toBeGreaterThan(2);
+    // the preset brought its own subject line
+    expect(s().design.body.title).toContain('This month at');
+  });
+
+  it('the New email dialog offers a blank start that keeps the brand', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('New email'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Blank'));
+    expect(s().design.rows).toHaveLength(0);
+    expect(s().design.brandId).toBe('brand_vee');
   });
 
   describe('replacing a non-empty design', () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
     afterEach(() => confirmSpy.mockClear());
 
+    /** Fill the canvas via the New email dialog. */
     const loadSomething = () => {
-      fireEvent.click(screen.getByTitle('Templates'));
-      fireEvent.click(screen.getByText('Starter templates'));
-      fireEvent.click(screen.getAllByText('Use this template')[0]);
+      fireEvent.click(screen.getByTitle('New email'));
+      fireEvent.click(within(screen.getByRole('dialog')).getByText('Newsletter'));
+    };
+
+    /** Reopen the dialog and pick Blank, which is what now asks to replace. */
+    const startBlank = () => {
+      fireEvent.click(screen.getByTitle('New email'));
+      fireEvent.click(within(screen.getByRole('dialog')).getByText('Blank'));
     };
 
     it('asks in an in-app dialog instead of window.confirm, and cancelling keeps the design', () => {
@@ -194,7 +212,7 @@ describe('App', () => {
       loadSomething();
       const rows = s().design.rows.length;
 
-      fireEvent.click(screen.getByTitle('New email'));
+      startBlank();
 
       // the native dialog must never be used
       expect(confirmSpy).not.toHaveBeenCalled();
@@ -211,7 +229,7 @@ describe('App', () => {
       loadSomething();
       expect(s().design.rows.length).toBeGreaterThan(0);
 
-      fireEvent.click(screen.getByTitle('New email'));
+      startBlank();
       fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Replace'));
 
       expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -222,8 +240,9 @@ describe('App', () => {
     it('skips the dialog entirely when the canvas is empty', () => {
       render(<App />);
       expect(s().design.rows).toHaveLength(0);
-      fireEvent.click(screen.getByTitle('New email'));
+      startBlank();
       expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(0);
     });
   });
 

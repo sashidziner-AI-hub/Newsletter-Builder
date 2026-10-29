@@ -22,7 +22,8 @@ npm run build      # type-check + production build into dist/
 | Styling | Per-block colors, fonts (email-safe stacks), sizes, alignment, padding, border radius; global body width / colors / font / link color |
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
 | Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html`, size warning for Gmail's ~102 KB clipping |
-| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, autosaved draft, named templates, 7 starter templates |
+| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, autosaved draft, named templates |
+| Presets | **New** opens a dialog of Blank + 8 starter presets (Newsletter, Promotional, Product launch, Welcome, Cold outreach, Event invitation, Order confirmation, Weekly digest), each with a live thumbnail rendered in the active brand |
 | Brands | Brand kits (colors, fonts, button style, logos, footer, social links), brand switcher in the top bar, brand color swatches on every color field, "Reset to brand", brands page with duplicate / archive / export / import JSON and a live kit preview |
 
 `{{merge_tags}}` typed into text, headings, buttons or links are passed through untouched to the exported HTML.
@@ -36,7 +37,7 @@ src/
   lib/render.ts         JSON -> email HTML (the only place HTML is produced)
   lib/design-ops.ts     lookups, row layout changes, JSON validation/normalisation
   lib/defaults.ts       block defaults, layouts, fonts
-  lib/starters.ts       starter templates
+  lib/presets.ts        starter presets (brand-neutral, token-based)
   lib/brand.ts          brand kit, token resolution, access helpers
   lib/storage.ts        localStorage drafts + templates + brands
   lib/image.ts          image upload downscaling
@@ -47,6 +48,23 @@ src/
 
 The editor canvas renders each block through the same `renderBlock()` used by the export, so what you see
 is what is exported.
+
+## Presets
+
+**New** opens a dialog with Blank plus eight presets, each showing a live thumbnail of its real
+exported HTML themed with the brand you pick in the dialog. Picking one creates a fresh copy —
+`build()` mints new ids every call, so editing an email can never reach the preset.
+
+Presets are brand-neutral: every colour and font is a `brand.*` token, so they keep re-theming
+after a later brand switch. The brand **name** is the exception — it is interpolated into the copy
+once, when the preset is applied, because from then on it is ordinary editable prose.
+
+Presets live in `src/lib/presets.ts` as plain TypeScript constants; there is no backend.
+*Cold outreach* is deliberately plain — no header, no hero, no images — so it reads as a personal
+email rather than a campaign.
+
+Every preset ships with placeholder art and placeholder copy on purpose. The HTML export dialog
+warns **"Placeholder images still in use"** until they are replaced.
 
 ## Composite blocks
 
@@ -90,6 +108,9 @@ Vee Technologies brand.
   and Outlook fall back to the web-safe end of the stack (`Kanit, Arial, Helvetica, sans-serif`). The fallback
   is chosen to look acceptable on its own.
 - **Brands** live in this browser only. Use Export / Import brand JSON to share a kit with the team.
+- **Presets ship with placeholder images and copy.** The export dialog warns while any remain;
+  replace the art, the alt text and the sample copy (including the Cold outreach signature) before
+  a real send.
 - **Brand footers and social links** feed the Footer block, which pulls them from the active brand
   with a per-email override. Nothing auto-inserts a Footer block into a new email yet.
 - **Outlook on Windows ignores background images**, so the Hero's centered background image falls

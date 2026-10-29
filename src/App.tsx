@@ -8,9 +8,10 @@ import { RightPanel } from './components/RightPanel';
 import { TopBar } from './components/TopBar';
 import { ExportHtmlModal, PreviewModal, TemplatesModal } from './components/Modals';
 import { BrandsModal } from './components/BrandsModal';
+import { NewEmailModal } from './components/NewEmailModal';
 import { ConfirmProvider, DELETE_BLOCK, DELETE_ROW, useConfirm } from './components/ConfirmDialog';
 
-type ModalName = 'preview' | 'html' | 'templates' | 'brands' | null;
+type ModalName = 'preview' | 'html' | 'templates' | 'brands' | 'new' | null;
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -106,6 +107,7 @@ function Editor() {
       {modal === 'html' && <ExportHtmlModal onClose={() => setModal(null)} notify={notify} />}
       {modal === 'templates' && <TemplatesModal onClose={() => setModal(null)} notify={notify} />}
       {modal === 'brands' && <BrandsModal onClose={() => setModal(null)} notify={notify} />}
+      {modal === 'new' && <NewEmailModal onClose={() => setModal(null)} notify={notify} />}
 
       {toast && (
         <div

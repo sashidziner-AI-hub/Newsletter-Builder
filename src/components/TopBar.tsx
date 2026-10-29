@@ -19,7 +19,7 @@ import { downloadFile, slugify } from '../lib/util';
 import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
 import { useConfirm } from './ConfirmDialog';
 
-type ModalName = 'preview' | 'html' | 'templates' | 'brands' | null;
+type ModalName = 'preview' | 'html' | 'templates' | 'brands' | 'new' | null;
 
 function IconBtn({
   title,
@@ -66,8 +66,7 @@ export function TopBar({
   const device = useEditor((s) => s.device);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
-  const { undo, redo, setDevice, updateBody, loadDesign, resetDesign, setBrandId } =
-    useEditor.getState();
+  const { undo, redo, setDevice, updateBody, loadDesign, setBrandId } = useEditor.getState();
   const brands = useAccessibleBrands();
   const brand = useActiveBrand();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -174,11 +173,7 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-0.5">
-        <IconBtn
-          title="New email"
-          label="New"
-          onClick={() => replaceThen(resetDesign)}
-        >
+        <IconBtn title="New email" label="New" onClick={() => openModal('new')}>
           <FilePlus2 size={17} />
         </IconBtn>
         <IconBtn title="Templates" label="Templates" onClick={() => openModal('templates')}>

@@ -5,7 +5,6 @@ import { auditImageSources } from '../lib/audit';
 import { resolveDesign } from '../lib/brand';
 import { renderDesign } from '../lib/render';
 import { downloadFile, slugify } from '../lib/util';
-import { STARTERS } from '../lib/starters';
 import {
   deleteTemplate,
   listTemplates,
@@ -173,6 +172,13 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
                 {images.insecure.length > 3 ? ` and ${images.insecure.length - 3} more` : ''}.
               </p>
             )}
+            {images.placeholders > 0 && (
+              <p className="mt-0.5">
+                <strong>Placeholder images still in use</strong> — {images.placeholders}{' '}
+                {images.placeholders === 1 ? 'image is' : 'images are'} stock art from a preset.
+                Swap in the real artwork (and its alt text) before sending.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -192,7 +198,6 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
   const design = useEditor((s) => s.design);
   const brands = useAccessibleBrands();
   const loadDesign = useEditor((s) => s.loadDesign);
-  const [tab, setTab] = useState<'mine' | 'starters'>('mine');
   const [list, setList] = useState<SavedTemplate[]>(() => listTemplates());
   const [name, setName] = useState(design.body.title);
 
@@ -236,24 +241,14 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
 
   return (
     <Modal title="Templates" onClose={onClose}>
-      <div className="flex gap-1 border-b border-slate-200 px-5 pt-2">
-        {(['mine', 'starters'] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`border-b-2 px-3 py-2 text-sm font-medium ${
-              tab === t ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            {t === 'mine' ? 'My templates' : 'Starter templates'}
-          </button>
-        ))}
+      <div className="border-b border-slate-200 bg-slate-50 px-5 py-2.5">
+        <p className="text-[11px] text-slate-500">
+          Your saved emails, stored in this browser. For a ready-made starting point, use
+          <span className="font-medium text-slate-700"> New</span> instead.
+        </p>
       </div>
 
       <div className="scroll-thin min-h-[320px] flex-1 overflow-y-auto p-5">
-        {tab === 'mine' ? (
-          <>
             <div className="mb-5 flex gap-2">
               <input
                 value={name}
@@ -318,31 +313,6 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
                   </li>
                 ))}
               </ul>
-            )}
-          </>
-        ) : (
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {STARTERS.map((s) => (
-              <li key={s.id} className="flex flex-col rounded-lg border border-slate-200 p-4">
-                <p className="text-sm font-semibold text-slate-900">{s.name}</p>
-                <p className="mt-1 flex-1 text-xs text-slate-500">{s.description}</p>
-                <button
-                  type="button"
-                  className={`${ghostBtn} mt-3 self-start`}
-                  onClick={() =>
-                    replaceThen(() => {
-                      // a starter brings content, not a brand — keep the active one
-                      loadDesign({ ...s.build(), brandId: design.brandId });
-                      notify(`Started from "${s.name}"`);
-                      onClose();
-                    })
-                  }
-                >
-                  Use this template
-                </button>
-              </li>
-            ))}
-          </ul>
         )}
       </div>
     </Modal>
