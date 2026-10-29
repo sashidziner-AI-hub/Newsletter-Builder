@@ -1,0 +1,262 @@
+import type {
+  Block,
+  BlockType,
+  BodySettings,
+  Design,
+  Padding,
+  Row,
+  SocialNetwork,
+} from '../types';
+import { uid } from './util';
+
+export const FONT_STACKS: { label: string; value: string }[] = [
+  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
+  { label: 'Helvetica', value: 'Helvetica, Arial, sans-serif' },
+  { label: 'Verdana', value: 'Verdana, Geneva, sans-serif' },
+  { label: 'Tahoma', value: 'Tahoma, Geneva, sans-serif' },
+  { label: 'Trebuchet MS', value: "'Trebuchet MS', Helvetica, sans-serif" },
+  { label: 'Georgia', value: 'Georgia, Times, serif' },
+  { label: 'Times New Roman', value: "'Times New Roman', Times, serif" },
+  { label: 'Courier New', value: "'Courier New', Courier, monospace" },
+];
+
+export const ROW_LAYOUTS: { label: string; layout: number[] }[] = [
+  { label: '1 column', layout: [1] },
+  { label: '2 columns', layout: [1, 1] },
+  { label: '3 columns', layout: [1, 1, 1] },
+  { label: '4 columns', layout: [1, 1, 1, 1] },
+  { label: '1 : 2', layout: [1, 2] },
+  { label: '2 : 1', layout: [2, 1] },
+  { label: '1 : 2 : 1', layout: [1, 2, 1] },
+];
+
+export const BLOCK_META: { type: BlockType; label: string }[] = [
+  { type: 'heading', label: 'Heading' },
+  { type: 'text', label: 'Text' },
+  { type: 'image', label: 'Image' },
+  { type: 'button', label: 'Button' },
+  { type: 'divider', label: 'Divider' },
+  { type: 'menu', label: 'Menu' },
+  { type: 'social', label: 'Social' },
+  { type: 'video', label: 'Video' },
+  { type: 'html', label: 'HTML' },
+];
+
+export const SOCIAL_NETWORKS: Record<
+  SocialNetwork,
+  { label: string; short: string; color: string }
+> = {
+  facebook: { label: 'Facebook', short: 'f', color: '#1877F2' },
+  instagram: { label: 'Instagram', short: 'IG', color: '#E4405F' },
+  x: { label: 'X (Twitter)', short: 'X', color: '#000000' },
+  linkedin: { label: 'LinkedIn', short: 'in', color: '#0A66C2' },
+  youtube: { label: 'YouTube', short: 'YT', color: '#FF0000' },
+  whatsapp: { label: 'WhatsApp', short: 'WA', color: '#25D366' },
+  telegram: { label: 'Telegram', short: 'TG', color: '#26A5E4' },
+  pinterest: { label: 'Pinterest', short: 'P', color: '#E60023' },
+  tiktok: { label: 'TikTok', short: 'TT', color: '#111111' },
+  github: { label: 'GitHub', short: 'GH', color: '#181717' },
+  email: { label: 'Email', short: '@', color: '#6B7280' },
+};
+
+export const pad = (top: number, right = top, bottom = top, left = right): Padding => ({
+  top,
+  right,
+  bottom,
+  left,
+});
+
+export function createBlock(type: BlockType): Block {
+  const id = uid('blk');
+  switch (type) {
+    case 'heading':
+      return {
+        id,
+        type,
+        values: {
+          text: 'Your heading here',
+          level: 2,
+          fontSize: 28,
+          color: '#111827',
+          fontWeight: 'bold',
+          lineHeight: 130,
+          fontFamily: '',
+          align: 'left',
+          padding: pad(10, 20),
+        },
+      };
+    case 'text':
+      return {
+        id,
+        type,
+        values: {
+          html: '<p>Write your message here. You can format the text, add links and lists.</p>',
+          fontSize: 15,
+          color: '',
+          lineHeight: 150,
+          fontFamily: '',
+          align: 'left',
+          padding: pad(10, 20),
+        },
+      };
+    case 'image':
+      return {
+        id,
+        type,
+        values: {
+          src: '',
+          alt: '',
+          href: '',
+          width: 100,
+          align: 'center',
+          borderRadius: 0,
+          padding: pad(10, 20),
+        },
+      };
+    case 'button':
+      return {
+        id,
+        type,
+        values: {
+          label: 'Click here',
+          href: 'https://example.com',
+          bgColor: '#2563EB',
+          color: '#FFFFFF',
+          fontSize: 16,
+          fontWeight: 'bold',
+          fontFamily: '',
+          borderRadius: 6,
+          borderWidth: 0,
+          borderColor: '#2563EB',
+          innerPaddingV: 12,
+          innerPaddingH: 24,
+          fullWidth: false,
+          align: 'center',
+          padding: pad(10, 20),
+        },
+      };
+    case 'divider':
+      return {
+        id,
+        type,
+        values: {
+          color: '#D1D5DB',
+          thickness: 1,
+          lineStyle: 'solid',
+          width: 100,
+          align: 'center',
+          padding: pad(10, 20),
+        },
+      };
+    case 'menu':
+      return {
+        id,
+        type,
+        values: {
+          items: [
+            { id: uid('mi'), label: 'Home', href: 'https://example.com' },
+            { id: uid('mi'), label: 'About', href: 'https://example.com/about' },
+            { id: uid('mi'), label: 'Contact', href: 'https://example.com/contact' },
+          ],
+          layout: 'horizontal',
+          fontSize: 14,
+          color: '#374151',
+          fontWeight: 'normal',
+          fontFamily: '',
+          separator: '',
+          itemPadding: 10,
+          align: 'center',
+          padding: pad(10, 20),
+        },
+      };
+    case 'social':
+      return {
+        id,
+        type,
+        values: {
+          items: [
+            { id: uid('si'), network: 'facebook', href: 'https://facebook.com', iconUrl: '' },
+            { id: uid('si'), network: 'instagram', href: 'https://instagram.com', iconUrl: '' },
+            { id: uid('si'), network: 'linkedin', href: 'https://linkedin.com', iconUrl: '' },
+          ],
+          size: 32,
+          shape: 'circle',
+          colorMode: 'brand',
+          monoColor: '#374151',
+          gap: 8,
+          align: 'center',
+          padding: pad(10, 20),
+        },
+      };
+    case 'video':
+      return {
+        id,
+        type,
+        values: {
+          url: '',
+          thumbnail: '',
+          alt: 'Watch the video',
+          width: 100,
+          align: 'center',
+          borderRadius: 0,
+          showCaption: true,
+          caption: '▶ Watch video',
+          captionColor: '#2563EB',
+          padding: pad(10, 20),
+        },
+      };
+    case 'html':
+      return {
+        id,
+        type,
+        values: {
+          html: '<div style="text-align:center;color:#6b7280;font-size:13px;">Custom HTML</div>',
+          padding: pad(0),
+        },
+      };
+  }
+}
+
+export function createRow(layout: number[] = [1]): Row {
+  return {
+    id: uid('row'),
+    layout: [...layout],
+    bgColor: '',
+    contentBgColor: '',
+    padding: pad(0),
+    stackOnMobile: true,
+    columns: layout.map(() => ({ id: uid('col'), blocks: [] })),
+  };
+}
+
+export function defaultBody(): BodySettings {
+  return {
+    bgColor: '#F3F4F6',
+    contentBgColor: '#FFFFFF',
+    width: 600,
+    fontFamily: FONT_STACKS[0].value,
+    textColor: '#374151',
+    linkColor: '#2563EB',
+    preheader: '',
+    title: 'Untitled email',
+  };
+}
+
+export function emptyDesign(): Design {
+  return { version: 1, body: defaultBody(), rows: [] };
+}
+
+export function cloneWithNewIds<T>(value: T): T {
+  const json = JSON.stringify(value);
+  const idMap = new Map<string, string>();
+  const replaced = json.replace(
+    /"id":"((?:blk|row|col|mi|si)_[a-z0-9]+)"/g,
+    (_m, oldId: string) => {
+      const prefix = oldId.split('_')[0];
+      const next = idMap.get(oldId) ?? uid(prefix);
+      idMap.set(oldId, next);
+      return `"id":"${next}"`;
+    },
+  );
+  return JSON.parse(replaced) as T;
+}
