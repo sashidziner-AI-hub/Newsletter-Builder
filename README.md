@@ -1,4 +1,5 @@
 # Newsletter Builder
+Newsletter Builder helps teams create polished company newsletters without writing code or depending on a designer. Add sections, drag them into place, and edit content directly on a live canvas preview. When the layout is ready, export it as email-ready HTML and send it through your mail tool.
 
 A drag-and-drop email template builder (React + Vite + TypeScript + Tailwind). Everything runs in the
 browser; templates are stored in `localStorage`.
