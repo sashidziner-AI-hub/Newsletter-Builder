@@ -406,3 +406,115 @@ markup in any `.txt`, and the unsubscribe link untagged in every format.
 — including **golden output** for the Newsletter and Cold outreach presets — plus a
 `merge tags, UTM and plain text (2A)` block in `src/test/app.test.tsx` (5) covering the three
 acceptance flows end to end. Suite: **354 passing** (was 266), `tsc --noEmit` clean.
+
+---
+
+## Feature 2B — Saved blocks, auto-save, version history — done (2026-10-29)
+
+Editing used to be risky and repetitive: closing a tab lost whatever was not explicitly
+saved, there was no way back once the undo stack was gone, and a CTA band built once had to
+be rebuilt by hand next time. All three are fixed on localStorage, through one shared
+storage helper that degrades honestly when the quota runs out.
+
+### Auto-save replaced the draft slot
+
+Before 2B the open email lived in a single unnamed `email-builder:draft:v1` slot, written
+400 ms after each change, while *templates* were a separate list written only on an explicit
+click. Auto-save now writes a **real record** in the templates storage, debounced 2 s,
+creating it on the first edit. A `beforeunload` flush covers a tab closed mid-debounce.
+
+| Decision | Why |
+|---|---|
+| Auto-saved records carry `autoSaved: true` | They group under **Drafts (auto-saved)** in the Templates dialog, so the list does not fill with "Untitled email". Naming one promotes it. |
+| Records predating 2B have no flag → read as named templates | The existing list is undisturbed, which is the no-migration-loss guarantee |
+| The old draft is migrated once, then its key is deleted | Otherwise in-progress work would look lost after the upgrade, or re-migrate into duplicates every boot |
+| `loadDesign` split into `openEmail` / `startNewEmail` | **Without this, picking a preset would auto-save the new design over the email you just left.** `startNewEmail` leaves `currentEmailId` null so the first edit mints its own record. |
+| The Templates name field became **Rename this email** + **Save as a copy** | With auto-save the email is already saved, so "Save current design" no longer meant anything coherent |
+| The "New" confirm now fires only when `dirty` | Auto-save means a replace loses nothing except an unflushed change from the last couple of seconds |
+
+Status is always visible in the top bar — "Saving…", "Saved just now" (ticking over to
+"Saved 5 min ago" on a 30 s interval), or **"Not saved: storage full"**. A failed write is
+never silent.
+
+### A bug this surfaced
+
+`openEmail` / `startNewEmail` set `dirty: false`, but the auto-save subscription immediately
+flipped it back to `true` because the design reference had changed — so the app believed a
+freshly opened email had unsaved edits, and the New dialog asked for no reason. The store
+already bumps `revision` on whole-design loads, so the subscription now skips those: a load
+is not an edit. `resetDesign` was also rewritten to delegate to `startNewEmail`, since a
+reset that left `currentEmailId` behind would auto-save the blank canvas over the email it
+had just discarded.
+
+### Saved blocks
+
+"Save as block" sits on the selected block's and row's panel header. The dialog takes a name
+(required) and a free-text category, and **warns if the payload contains a `data:` image**,
+since those do not survive a real inbox.
+
+The library is a third left-panel tab (**Content / Rows / Saved**) with search, category
+grouping, per-item thumbnails rendered with the **active** brand, rename, delete,
+click-to-insert and drag. Export / Import brand-neutral JSON is there too: duplicates by id
+are skipped silently, and a name clash is confirmed separately so the unambiguous entries
+still import.
+
+Payloads keep their `brand.*` tokens as tokens and hex overrides as hex, so a saved CTA band
+re-themes per brand. Inserting always goes through `cloneWithNewIds()`, so the copy can never
+alias the original.
+
+**`cloneWithNewIds()` was stale.** Its regex covered only `blk|row|col|mi|si`, but 1B/1C
+added `nv` (nav links), `hc` (hero cards) and `ai` (article items) — so duplicating a Header,
+Hero-cards or Article-list block reused those nested ids. Benign until now (they are only
+React keys inside their own block's array), but it broke 2B's fresh-ids rule. The regex now
+covers every live prefix.
+
+Drag integration rides the existing rails: `DragKind` gained `saved-block` (joining `tool` in
+the block/column targeting branch) and `saved-row` (joining `layout` in the row branch).
+
+### Version history
+
+Rules are pure and in `src/lib/versions.ts`, so they are tested directly:
+
+- a **manual** "Save version" with an optional note,
+- an **automatic** snapshot at most once every 5 minutes of active editing,
+- a **pre-restore** and **pre-replace** snapshot before anything replaces the canvas,
+- and **never** a snapshot of a design identical to the latest one.
+
+Last 20 per email, oldest pruned first. **Restore destroys nothing**: it snapshots the
+present first, so you can immediately restore forward again — which is the third acceptance
+test. One consequence worth knowing: clicking "Save version" straight after an auto-save does
+nothing, because the state is already captured; the dialog says "No changes since the last
+version" rather than pretending.
+
+Versions store the design only — rows, blocks, email settings, `brandId` — never brand
+definitions.
+
+### Storage safety
+
+One writer, `writeSafe()`. On `QuotaExceededError` it prunes the **10 oldest versions across
+every email** (which is why versions live in one key rather than one per email), retries once,
+and only then returns `'full'` for the caller to surface. Every record carries
+`schemaVersion: 2`; anything without one reads as version 1 and is kept.
+
+The Templates dialog footer shows live usage — "Storage: 2.1 MB of about 5 MB" — with a
+warning past 80 %. Usage counts only `email-builder:` keys, in UTF-16 code units, which is
+what the quota is actually measured in.
+
+### Known gaps
+
+- `STORAGE_LIMIT_BYTES` is a fixed 5 MB. Browsers vary and none expose the real figure, so
+  the readout is approximate by nature.
+- Saved-block thumbnails render a full iframe each; a library of a hundred blocks would want
+  virtualising.
+- Deleting an email deletes its history with it, by design — there is no trash.
+
+### Tests
+
+`src/test/storage.test.ts` (25), `src/test/versions.test.ts` (21),
+`src/test/saved-blocks.test.ts` (25), `src/test/acceptance-2b.test.ts` (3 — the three stated
+acceptance flows end to end), plus auto-save, drafts-grouping and rename/copy cases in
+`src/test/app.test.tsx`. Suite: **430 passing** (was 354), `tsc --noEmit` clean.
+
+The quota path is tested by stubbing `Storage.prototype.setItem` to throw
+`QuotaExceededError` a set number of times, proving prune-then-retry succeeds, that an
+unrecoverable failure reports `'full'`, and that the failure reaches the save status.

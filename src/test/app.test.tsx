@@ -10,9 +10,14 @@ vi.mock('../components/RichTextEditor', () => ({
 
 import App from '../App';
 import { useEditor } from '../store';
+import { listTemplates } from '../lib/storage';
 import { emptyBrand, veeBrand } from '../lib/brand';
 
 const s = () => useEditor.getState();
+
+/** Row layouts moved behind the left panel's Rows tab in 2B. */
+const openRowsTab = () => fireEvent.click(screen.getByText('Rows'));
+const openContentTab = () => fireEvent.click(screen.getByText('Content'));
 
 beforeEach(() => {
   localStorage.clear();
@@ -28,9 +33,11 @@ describe('App', () => {
 
   it('builds an email by clicking: row, heading, edit text, undo', () => {
     render(<App />);
+    openRowsTab();
     fireEvent.click(screen.getByTitle('Add 2 columns row'));
     expect(s().design.rows).toHaveLength(1);
 
+    openContentTab();
     fireEvent.click(screen.getByTitle('Add Heading'));
     const canvas = () => within(screen.getByRole('main'));
     expect(canvas().getByText('Your heading here')).toBeTruthy();
@@ -122,7 +129,9 @@ describe('App', () => {
 
   it('changing the row layout from the row panel keeps blocks', () => {
     render(<App />);
+    openRowsTab();
     fireEvent.click(screen.getByTitle('Add 3 columns row'));
+    openContentTab();
     fireEvent.click(screen.getByTitle('Add Text'));
     fireEvent.click(screen.getByTitle('Add Button')); // second block in the same (first) column
     act(() => s().select({ kind: 'row', id: s().design.rows[0].id }));
@@ -155,20 +164,41 @@ describe('App', () => {
     expect(frame.getAttribute('srcdoc')).toContain('Your heading here');
   });
 
-  it('saves a template and opens it again', () => {
+  it('names an auto-saved email and opens it again', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Heading'));
+    // auto-save creates the record; this test does not wait for the debounce
+    act(() => s().saveNow());
+
     fireEvent.click(screen.getByTitle('Templates'));
-    fireEvent.change(screen.getByPlaceholderText('Template name'), { target: { value: 'My promo' } });
-    fireEvent.click(screen.getByText('Save current design'));
+    fireEvent.change(screen.getByLabelText('Email name'), { target: { value: 'My promo' } });
+    fireEvent.click(screen.getByText('Rename this email'));
     expect(screen.getByText('My promo')).toBeTruthy();
+    // naming it moves it out of the drafts group
+    expect(screen.getByText('My templates')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Close'));
 
-    s().resetDesign();
+    act(() => s().resetDesign());
     expect(s().design.rows).toHaveLength(0);
     fireEvent.click(screen.getByTitle('Templates'));
     fireEvent.click(screen.getByText('Open'));
     expect(s().design.rows).toHaveLength(1);
+  });
+
+  it('saves a copy under a new name without touching the original', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Heading'));
+    act(() => s().saveNow());
+    const originalId = s().currentEmailId;
+
+    fireEvent.click(screen.getByTitle('Templates'));
+    fireEvent.change(screen.getByLabelText('Email name'), { target: { value: 'Variant B' } });
+    fireEvent.click(screen.getByText('Save as a copy'));
+
+    // editing moves to the copy, and the original record still exists
+    expect(s().currentEmailId).not.toBe(originalId);
+    expect(listTemplates().some((t) => t.id === originalId)).toBe(true);
+    expect(listTemplates().some((t) => t.name === 'Variant B')).toBe(true);
   });
 
   it('presets load from the New email dialog', () => {
@@ -191,25 +221,33 @@ describe('App', () => {
     expect(s().design.brandId).toBe('brand_vee');
   });
 
-  describe('replacing a non-empty design', () => {
+  describe('replacing the canvas', () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
     afterEach(() => confirmSpy.mockClear());
 
-    /** Fill the canvas via the New email dialog. */
-    const loadSomething = () => {
-      fireEvent.click(screen.getByTitle('New email'));
-      fireEvent.click(within(screen.getByRole('dialog')).getByText('Newsletter'));
-    };
-
-    /** Reopen the dialog and pick Blank, which is what now asks to replace. */
     const startBlank = () => {
       fireEvent.click(screen.getByTitle('New email'));
       fireEvent.click(within(screen.getByRole('dialog')).getByText('Blank'));
     };
 
-    it('asks in an in-app dialog instead of window.confirm, and cancelling keeps the design', () => {
+    it('does not ask once the work is saved — that is the point of auto-save', () => {
       render(<App />);
-      loadSomething();
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      act(() => s().saveNow());
+      expect(s().dirty).toBe(false);
+
+      startBlank();
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(0);
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('asks in an in-app dialog while a change is still unflushed', () => {
+      render(<App />);
+      // an edit with no saveNow(): the debounce has not run, so this is pending
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      expect(s().dirty).toBe(true);
       const rows = s().design.rows.length;
 
       startBlank();
@@ -217,7 +255,7 @@ describe('App', () => {
       // the native dialog must never be used
       expect(confirmSpy).not.toHaveBeenCalled();
       const dialog = screen.getByRole('alertdialog');
-      expect(within(dialog).getByText('Replace the current design?')).toBeTruthy();
+      expect(within(dialog).getByText('Start a new email?')).toBeTruthy();
 
       fireEvent.click(within(dialog).getByText('Cancel'));
       expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -226,23 +264,20 @@ describe('App', () => {
 
     it('performs the action once confirmed', () => {
       render(<App />);
-      loadSomething();
-      expect(s().design.rows.length).toBeGreaterThan(0);
-
+      fireEvent.click(screen.getByTitle('Add Heading'));
       startBlank();
-      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Replace'));
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Start new'));
 
       expect(screen.queryByRole('alertdialog')).toBeNull();
       expect(s().design.rows).toHaveLength(0);
       expect(confirmSpy).not.toHaveBeenCalled();
     });
 
-    it('skips the dialog entirely when the canvas is empty', () => {
+    it('skips the dialog entirely on an untouched canvas', () => {
       render(<App />);
-      expect(s().design.rows).toHaveLength(0);
+      expect(s().dirty).toBe(false);
       startBlank();
       expect(screen.queryByRole('alertdialog')).toBeNull();
-      expect(s().design.rows).toHaveLength(0);
     });
   });
 
@@ -493,27 +528,17 @@ describe('App', () => {
     });
   });
 
-  it('saving over an existing template name overwrites instead of duplicating', () => {
+  it('keeps auto-saved drafts separate from named templates', () => {
     render(<App />);
-    fireEvent.click(screen.getByTitle('Add Button'));
+    fireEvent.click(screen.getByTitle('Add Heading'));
+    act(() => s().saveNow());
 
-    const saveOnce = () => {
-      fireEvent.click(screen.getByTitle('Templates'));
-      fireEvent.click(screen.getByText('Save current design'));
-    };
-    // count saved rows inside the Templates modal only, not the canvas toolbars
-    const savedCount = () =>
-      within(screen.getByRole('dialog')).getAllByLabelText(/^Delete /).length;
-
-    saveOnce();
-    expect(savedCount()).toBe(1);
-    fireEvent.click(screen.getByLabelText('Close'));
-
-    // same name again: must ask, and must not leave two entries behind
-    saveOnce();
-    const dialog = screen.getByRole('alertdialog');
-    expect(within(dialog).getByText('Overwrite')).toBeTruthy();
-    fireEvent.click(within(dialog).getByText('Overwrite'));
-    expect(savedCount()).toBe(1);
+    fireEvent.click(screen.getByTitle('Templates'));
+    const dialog = within(screen.getByRole('dialog'));
+    // an unnamed record lands in the drafts group, not among the templates
+    expect(dialog.getByText('Drafts (auto-saved)')).toBeTruthy();
+    expect(dialog.queryByText('My templates')).toBeNull();
+    // and the storage readout is there
+    expect(dialog.getByText(/Storage:/)).toBeTruthy();
   });
 });

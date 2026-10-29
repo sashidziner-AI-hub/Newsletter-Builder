@@ -23,7 +23,9 @@ npm run build      # type-check + production build into dist/
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
 | Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html`, size warning for Gmail's ~102 KB clipping |
 | Sending prep | Merge tags with per-ESP formats (double curly, Mailchimp, HubSpot, custom), UTM link tagger with per-link opt-out, and a plain-text version alongside the HTML |
-| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, autosaved draft, named templates |
+| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, named templates |
+| Saving | Auto-save every 2 s with visible status, reload recovery, 20-deep version history with read-only preview and restore |
+| Saved blocks | Save any block or row to a searchable library with categories and brand-aware thumbnails, drag or click to reuse, export / import as JSON |
 | Presets | **New** opens a dialog of Blank + 8 starter presets (Newsletter, Promotional, Product launch, Welcome, Cold outreach, Event invitation, Order confirmation, Weekly digest), each with a live thumbnail rendered in the active brand |
 | Brands | Brand kits (colors, fonts, button style, logos, footer, social links), brand switcher in the top bar, brand color swatches on every color field, "Reset to brand", brands page with duplicate / archive / export / import JSON and a live kit preview |
 
@@ -43,6 +45,8 @@ src/
   lib/merge.ts          merge tags, canonical form + per-ESP formats
   lib/utm.ts            UTM tagger and its skip rules
   lib/plaintext.ts      design -> plain-text version
+  lib/blocks-library.ts saved blocks: validation, import planning, instantiation
+  lib/versions.ts       snapshot rules, pruning (pure, no storage)
   lib/brand.ts          brand kit, token resolution, access helpers
   lib/storage.ts        localStorage drafts + templates + brands
   lib/image.ts          image upload downscaling
@@ -53,6 +57,32 @@ src/
 
 The editor canvas renders each block through the same `renderBlock()` used by the export, so what you see
 is what is exported.
+
+## Saving, history and saved blocks
+
+**Auto-save** writes the open email about 2 s after your last change, creating its record on
+the first edit, so closing the tab cannot lose work. The top bar always says where you stand —
+"Saving…", "Saved 5 min ago", or **"Not saved: storage full"**. Reopening the app restores the
+last email you edited.
+
+Emails you have not named appear under **Drafts (auto-saved)** in the Templates dialog; naming
+one with **Rename this email** moves it into your templates. **Save as a copy** branches the
+email into a separate record and switches you to editing the copy.
+
+**Version history** (History in the top bar) keeps the last 20 versions per email: one every
+5 minutes of editing, one whenever you click Save version, and one immediately before a
+restore or before a preset replaces the canvas. Identical designs are never snapshotted twice.
+Restoring snapshots your current design first, so you can always go straight back.
+
+**Saved blocks** — select a block or row, choose *Save as block*, and it joins a searchable
+library in the left panel's **Saved** tab. Payloads keep their `brand.*` tokens, so a saved CTA
+band re-themes with whichever brand is active, while anything you set by hand stays put.
+Inserting always creates a copy with fresh ids, so editing it never touches the original.
+Export / Import JSON shares a library with the team.
+
+**Storage** is localStorage, roughly 5 MB. The Templates dialog shows current usage. If it
+fills, the app prunes the oldest version snapshots, retries, and only then tells you — it never
+fails silently. Export emails as JSON and delete them to reclaim space.
 
 ## Merge tags, tracking and plain text
 
@@ -144,6 +174,9 @@ Vee Technologies brand.
   and Outlook fall back to the web-safe end of the stack (`Kanit, Arial, Helvetica, sans-serif`). The fallback
   is chosen to look acceptable on its own.
 - **Brands** live in this browser only. Use Export / Import brand JSON to share a kit with the team.
+- **Everything is per-browser**, including saved blocks and version history. Nothing syncs
+  between machines or teammates; JSON export is the sharing mechanism.
+- **Deleting an email deletes its version history** with it. There is no trash.
 - **Merge tags are stored as `{{tag}}` only.** The six built-ins map to real ESP field names;
   a hand-typed seventh tag falls back to a generic transform, which may not match a bespoke
   field. Extend the table in `src/lib/merge.ts`.

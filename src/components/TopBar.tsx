@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Braces,
   Code2,
@@ -6,6 +6,7 @@ import {
   FilePlus2,
   FolderOpen,
   Mail,
+  History,
   Monitor,
   Palette,
   Redo2,
@@ -19,7 +20,56 @@ import { downloadFile, slugify } from '../lib/util';
 import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
 import { useConfirm } from './ConfirmDialog';
 
-type ModalName = 'preview' | 'html' | 'templates' | 'brands' | 'new' | null;
+type ModalName = 'preview' | 'html' | 'templates' | 'brands' | 'new' | 'history' | null;
+
+/** "just now", "5 min ago" — kept in step by the 30 s tick below. */
+function ago(at: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  return `${Math.round(hours / 24)} day${Math.round(hours / 24) === 1 ? '' : 's'} ago`;
+}
+
+/**
+ * Auto-save status. Never shows nothing after a failure: a storage problem has
+ * to be visible, or the user will trust a save that did not happen.
+ */
+function SaveStatus() {
+  const saveState = useEditor((s) => s.saveState);
+  const [now, setNow] = useState(() => Date.now());
+
+  // "Saved just now" has to become "Saved 5 min ago" on its own
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (saveState.status === 'idle') return null;
+
+  const error = saveState.status === 'error';
+  const text =
+    error
+      ? saveState.message || 'Not saved'
+      : saveState.status === 'saving'
+        ? 'Saving…'
+        : `Saved ${ago(saveState.at, now)}`;
+
+  return (
+    <span
+      role="status"
+      title={error ? 'Export your work as JSON to be safe' : undefined}
+      className={`hidden shrink-0 text-[11px] font-medium md:inline ${
+        error ? 'text-red-600' : 'text-slate-400'
+      }`}
+    >
+      {text}
+      {!error && saveState.message ? ` · ${saveState.message}` : ''}
+    </span>
+  );
+}
 
 function IconBtn({
   title,
@@ -66,20 +116,24 @@ export function TopBar({
   const device = useEditor((s) => s.device);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
-  const { undo, redo, setDevice, updateBody, loadDesign, setBrandId } = useEditor.getState();
+  const { undo, redo, setDevice, updateBody, startNewEmail, setBrandId } = useEditor.getState();
   const brands = useAccessibleBrands();
   const brand = useActiveBrand();
+  const dirty = useEditor((s) => s.dirty);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const confirm = useConfirm();
 
-  /** Runs `action` straight away on an empty canvas, otherwise asks first. */
+  /**
+   * Auto-save means a replace no longer loses anything, so this only asks when
+   * there is a change the debounce has not written yet.
+   */
   const replaceThen = (action: () => void) => {
-    if (design.rows.length === 0) return action();
+    if (!dirty) return action();
     confirm(
       {
         title: 'Replace the current design?',
-        message: 'Unsaved changes will be lost.',
+        message: 'A change from the last couple of seconds may not be saved yet.',
         confirmLabel: 'Replace',
         danger: true,
       },
@@ -93,7 +147,8 @@ export function TopBar({
       const parsed = normalizeDesign(JSON.parse(await file.text()));
       if (!parsed) return notify('That file is not a valid email design JSON');
       replaceThen(() => {
-        loadDesign(parsed);
+        // an imported design is a new email, not an edit of the open one
+        startNewEmail(parsed);
         notify('Design imported');
       });
     } catch {
@@ -116,6 +171,8 @@ export function TopBar({
         onChange={(e) => updateBody({ title: e.target.value })}
         className="w-56 rounded-md border border-transparent px-2 py-1 text-sm font-medium text-slate-800 hover:border-slate-300 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       />
+
+      <SaveStatus />
 
       <div className="flex items-center gap-1">
         <label className="sr-only" htmlFor="brand-switcher">
@@ -178,6 +235,9 @@ export function TopBar({
         </IconBtn>
         <IconBtn title="Templates" label="Templates" onClick={() => openModal('templates')}>
           <FolderOpen size={17} />
+        </IconBtn>
+        <IconBtn title="Version history" label="History" onClick={() => openModal('history')}>
+          <History size={17} />
         </IconBtn>
         <IconBtn title="Import JSON" label="Import" onClick={() => fileInput.current?.click()}>
           <Upload size={17} />

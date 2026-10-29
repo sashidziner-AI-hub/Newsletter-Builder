@@ -433,7 +433,9 @@ export function cloneWithNewIds<T>(value: T): T {
   const json = JSON.stringify(value);
   const idMap = new Map<string, string>();
   const replaced = json.replace(
-    /"id":"((?:blk|row|col|mi|si)_[a-z0-9]+)"/g,
+    // every live uid() prefix: 1B/1C added nv (nav links), hc (hero cards),
+    // ai (article items) and bsl (brand social links)
+    /"id":"((?:blk|row|col|mi|si|nv|hc|ai|bsl)_[a-z0-9]+)"/g,
     (_m, oldId: string) => {
       const prefix = oldId.split('_')[0];
       const next = idMap.get(oldId) ?? uid(prefix);

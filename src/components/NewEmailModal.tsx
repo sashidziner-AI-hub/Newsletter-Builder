@@ -87,8 +87,9 @@ export function NewEmailModal({
   onClose: () => void;
   notify: (m: string) => void;
 }) {
-  const design = useEditor((s) => s.design);
-  const loadDesign = useEditor((s) => s.loadDesign);
+  const startNewEmail = useEditor((s) => s.startNewEmail);
+  const snapshot = useEditor((s) => s.snapshot);
+  const dirty = useEditor((s) => s.dirty);
   const setBrandId = useEditor((s) => s.setBrandId);
   const brands = useAccessibleBrands();
   const brand = useActiveBrand();
@@ -101,15 +102,17 @@ export function NewEmailModal({
     [brand],
   );
 
-  /** Runs `action` straight away on an empty canvas, otherwise asks first. */
+  /**
+   * Auto-save means starting a new email keeps the old one, so this only asks
+   * when a change from the last couple of seconds is still unflushed.
+   */
   const replaceThen = (action: () => void) => {
-    if (design.rows.length === 0) return action();
+    if (!dirty) return action();
     confirm(
       {
-        title: 'Replace the current design?',
-        message: 'Unsaved changes will be lost.',
-        confirmLabel: 'Replace',
-        danger: true,
+        title: 'Start a new email?',
+        message: 'A change from the last couple of seconds may not be saved yet.',
+        confirmLabel: 'Start new',
       },
       action,
     );
@@ -117,15 +120,18 @@ export function NewEmailModal({
 
   const apply = (preset: Preset) =>
     replaceThen(() => {
-      // a fresh build, not the preview copy
-      loadDesign({ ...preset.build(brand), brandId: brand.id });
+      // snapshot the outgoing email before the canvas is replaced
+      snapshot('pre-replace', 'Before starting from a preset');
+      // a fresh build, not the preview copy; a new email, not an edit of this one
+      startNewEmail({ ...preset.build(brand), brandId: brand.id });
       notify(`Started from "${preset.name}"`);
       onClose();
     });
 
   const blank = () =>
     replaceThen(() => {
-      loadDesign({ ...emptyDesign(), brandId: brand.id });
+      snapshot('pre-replace', 'Before starting a blank email');
+      startNewEmail({ ...emptyDesign(), brandId: brand.id });
       notify('New blank email');
       onClose();
     });

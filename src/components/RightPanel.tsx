@@ -1,5 +1,5 @@
-import { Copy, Settings2, Trash2, Rows3 } from 'lucide-react';
-import type { Row } from '../types';
+import { Bookmark, Copy, Settings2, Trash2, Rows3 } from 'lucide-react';
+import type { Block, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
 import { findBlock } from '../lib/design-ops';
 import { useEditor } from '../store';
@@ -27,12 +27,14 @@ function Header({
   icon,
   title,
   subtitle,
+  onSaveAsBlock,
   onDuplicate,
   onDelete,
 }: {
   icon: React.ReactNode;
   title: string;
   subtitle?: string;
+  onSaveAsBlock?: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
 }) {
@@ -43,6 +45,17 @@ function Header({
         <h2 className="truncate text-sm font-semibold text-slate-900">{title}</h2>
         {subtitle && <p className="truncate text-[11px] text-slate-400">{subtitle}</p>}
       </div>
+      {onSaveAsBlock && (
+        <button
+          type="button"
+          title="Save as a reusable block"
+          aria-label="Save as block"
+          onClick={onSaveAsBlock}
+          className="rounded-md p-1.5 text-slate-500 hover:bg-brand-50 hover:text-brand-700"
+        >
+          <Bookmark size={15} />
+        </button>
+      )}
       {onDuplicate && (
         <button
           type="button"
@@ -69,7 +82,11 @@ function Header({
   );
 }
 
-export function RightPanel() {
+export function RightPanel({
+  onSaveAsBlock,
+}: {
+  onSaveAsBlock: (kind: 'block' | 'row', payload: Block | Row) => void;
+}) {
   const design = useEditor((s) => s.design);
   const selection = useEditor((s) => s.selection);
   const revision = useEditor((s) => s.revision);
@@ -101,6 +118,7 @@ export function RightPanel() {
           icon={<BlockIcon type={block.type} size={17} />}
           title={label}
           subtitle="Content block"
+          onSaveAsBlock={() => onSaveAsBlock('block', block)}
           onDuplicate={() => duplicateBlock(block.id)}
           onDelete={() => confirm(DELETE_BLOCK, () => deleteBlock(block.id))}
         />
@@ -159,6 +177,7 @@ export function RightPanel() {
           icon={<Rows3 size={17} />}
           title="Row"
           subtitle={`${row.layout.length} column${row.layout.length > 1 ? 's' : ''}`}
+          onSaveAsBlock={() => onSaveAsBlock('row', row)}
           onDuplicate={() => duplicateRow(row.id)}
           onDelete={() => confirm(DELETE_ROW, () => deleteRow(row.id))}
         />
