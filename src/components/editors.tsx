@@ -25,18 +25,21 @@ import type {
   Block,
 } from '../types';
 import { resolveToken } from '../lib/brand';
+import { MERGE_TAGS } from '../lib/merge';
 import { FONT_STACKS, ROW_LAYOUTS, SOCIAL_NETWORKS } from '../lib/defaults';
 import { readImageFile } from '../lib/image';
-import { uid } from '../lib/util';
+import { slugify, uid } from '../lib/util';
 import { useActiveBrand, useEditor } from '../store';
 import {
   AlignField,
   ColorField,
+  LinkField,
   NumberField,
   PaddingField,
   Section,
   Segmented,
   SelectField,
+  TagTextField,
   TextField,
   ToggleField,
 } from './fields';
@@ -68,7 +71,7 @@ export function HeadingEditor({ block, set }: EditorProps<'heading', HeadingValu
   return (
     <>
       <Section title="Content">
-        <TextField label="Heading text" multiline rows={2} value={v.text} onChange={(text) => set({ text })} />
+        <TagTextField label="Heading text" multiline rows={2} value={v.text} onChange={(text) => set({ text })} />
         <SelectField
           label="Level"
           value={v.level}
@@ -178,7 +181,13 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
           }
         />
         <TextField label="Alt text" value={v.alt} onChange={(alt) => set({ alt })} placeholder="Describe the image" />
-        <TextField label="Link URL (optional)" value={v.href} onChange={(href) => set({ href })} placeholder="https://…" />
+        <LinkField
+          label="Link URL (optional)"
+          value={v.href}
+          onChange={(href) => set({ href })}
+          noTrack={v.noTrack}
+          onNoTrack={(noTrack) => set({ noTrack })}
+        />
       </Section>
       <Section title="Style">
         <NumberField label="Width" unit="%" min={10} max={100} value={v.width} onChange={(width) => set({ width })} />
@@ -215,8 +224,13 @@ export function ButtonEditor({ block, set }: EditorProps<'button', ButtonValues>
   return (
     <>
       <Section title="Content">
-        <TextField label="Label" value={v.label} onChange={(label) => set({ label })} />
-        <TextField label="Link URL" value={v.href} onChange={(href) => set({ href })} placeholder="https://…" />
+        <TagTextField label="Label" value={v.label} onChange={(label) => set({ label })} />
+        <LinkField
+          value={v.href}
+          onChange={(href) => set({ href })}
+          noTrack={v.noTrack}
+          onNoTrack={(noTrack) => set({ noTrack })}
+        />
         <button
           type="button"
           onClick={applyBrandStyle}
@@ -304,6 +318,21 @@ export function MenuEditor({ block, set }: EditorProps<'menu', MenuValues>) {
                   placeholder="https://…"
                   onChange={(e) => updateItem(it.id, { href: e.target.value })}
                 />
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                    checked={it.noTrack === true}
+                    onChange={(e) =>
+                      set({
+                        items: v.items.map((x) =>
+                          x.id === it.id ? { ...x, noTrack: e.target.checked } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <span className="text-[11px] text-slate-500">Don&rsquo;t add tracking</span>
+                </label>
               </div>
               <button
                 type="button"
@@ -889,6 +918,15 @@ export function HeaderEditor({
                     placeholder="https://…"
                     onChange={(e) => patch({ href: e.target.value })}
                   />
+                  <label className="flex cursor-pointer items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                      checked={item.noTrack === true}
+                      onChange={(e) => patch({ noTrack: e.target.checked })}
+                    />
+                    <span className="text-[11px] text-slate-500">Don&rsquo;t add tracking</span>
+                  </label>
                 </>
               )}
             />
@@ -1036,6 +1074,15 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
                   placeholder="https://…"
                   onChange={(e) => patch({ linkHref: e.target.value })}
                 />
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                    checked={item.noTrack === true}
+                    onChange={(e) => patch({ noTrack: e.target.checked })}
+                  />
+                  <span className="text-[11px] text-slate-500">Don&rsquo;t add tracking</span>
+                </label>
               </>
             )}
           />
@@ -1051,7 +1098,13 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
       {!isCards && (
         <Section title="Call to action">
           <TextField label="Button label" value={v.ctaLabel} placeholder="Leave empty to hide" onChange={(ctaLabel) => set({ ctaLabel })} />
-          <TextField label="Button URL" value={v.ctaHref} placeholder="https://…" onChange={(ctaHref) => set({ ctaHref })} />
+          <LinkField
+            label="Button URL"
+            value={v.ctaHref}
+            onChange={(ctaHref) => set({ ctaHref })}
+            noTrack={v.ctaNoTrack}
+            onNoTrack={(ctaNoTrack) => set({ ctaNoTrack })}
+          />
           <Segmented
             label="Style"
             value={v.ctaStyle}
@@ -1175,6 +1228,15 @@ export function ArticleListEditor({ block, set }: EditorProps<'articles', Articl
                 placeholder="https://…"
                 onChange={(e) => patch({ readMoreHref: e.target.value })}
               />
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+                  checked={item.noTrack === true}
+                  onChange={(e) => patch({ noTrack: e.target.checked })}
+                />
+                <span className="text-[11px] text-slate-500">Don&rsquo;t add tracking</span>
+              </label>
             </>
           )}
         />
@@ -1390,6 +1452,11 @@ export function BodyEditor({
   onResetToBrand: () => void;
 }) {
   const brand = useActiveBrand();
+  // sample values are editor state, never part of the design
+  const showSample = useEditor((s) => s.showSampleData);
+  const onShowSample = useEditor((s) => s.setShowSampleData);
+  const sample = useEditor((s) => s.sampleData);
+  const onSample = useEditor((s) => s.setSampleData);
   return (
     <>
       <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
@@ -1408,8 +1475,8 @@ export function BodyEditor({
         </button>
       </div>
       <Section title="Email">
-        <TextField label="Title / subject" value={body.title} onChange={(title) => onChange({ title })} />
-        <TextField
+        <TagTextField label="Title / subject" value={body.title} onChange={(title) => onChange({ title })} />
+        <TagTextField
           label="Preheader"
           value={body.preheader}
           placeholder="Preview text shown next to the subject"
@@ -1427,6 +1494,109 @@ export function BodyEditor({
           onChange={(contentBgColor) => onChange({ contentBgColor })}
         />
       </Section>
+      <Section title="Merge tags" defaultOpen={false}>
+        <SelectField
+          label="Merge tag format"
+          value={body.mergeFormat}
+          onChange={(mergeFormat) => onChange({ mergeFormat })}
+          options={[
+            { value: 'curly' as const, label: 'Double curly — {{tag}}' },
+            { value: 'mailchimp' as const, label: 'Mailchimp — *|TAG|*' },
+            { value: 'hubspot' as const, label: 'HubSpot — {{ contact.tag }}' },
+            { value: 'custom' as const, label: 'Custom prefix / suffix' },
+          ]}
+        />
+        {body.mergeFormat === 'custom' && (
+          <div className="grid grid-cols-2 gap-2">
+            <TextField
+              label="Prefix"
+              value={body.mergeCustom.prefix}
+              onChange={(prefix) => onChange({ mergeCustom: { ...body.mergeCustom, prefix } })}
+            />
+            <TextField
+              label="Suffix"
+              value={body.mergeCustom.suffix}
+              onChange={(suffix) => onChange({ mergeCustom: { ...body.mergeCustom, suffix } })}
+            />
+          </div>
+        )}
+        <p className="text-[11px] leading-snug text-slate-400">
+          Tags are always stored as <code>{'{{tag}}'}</code> and converted on export, so changing
+          the format never edits your content.
+        </p>
+        <ToggleField label="Preview with sample data" value={showSample} onChange={onShowSample} />
+        {showSample && (
+          <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+            {MERGE_TAGS.filter((t) => !t.tag.endsWith('_url')).map((t) => (
+              <label key={t.tag} className="block">
+                <span className="mb-0.5 block text-[11px] font-medium text-slate-600">{t.label}</span>
+                <input
+                  aria-label={`Sample ${t.label}`}
+                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                  value={sample[t.tag] ?? ''}
+                  onChange={(e) => onSample({ ...sample, [t.tag]: e.target.value })}
+                />
+              </label>
+            ))}
+            <p className="text-[11px] leading-snug text-slate-500">
+              Canvas only. The export always keeps the tags.
+            </p>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Link tracking" defaultOpen={false}>
+        <ToggleField
+          label="Add UTM parameters"
+          value={body.utm.enabled}
+          onChange={(enabled) =>
+            onChange({
+              utm: {
+                ...body.utm,
+                enabled,
+                // a sensible campaign on first enable, still editable
+                campaign: body.utm.campaign || slugify(body.title),
+              },
+            })
+          }
+        />
+        {body.utm.enabled && (
+          <>
+            <TextField
+              label="utm_source"
+              value={body.utm.source}
+              placeholder="e.g. newsletter"
+              onChange={(source) => onChange({ utm: { ...body.utm, source } })}
+            />
+            <TextField
+              label="utm_medium"
+              value={body.utm.medium}
+              onChange={(medium) => onChange({ utm: { ...body.utm, medium } })}
+            />
+            <TextField
+              label="utm_campaign"
+              value={body.utm.campaign}
+              onChange={(campaign) => onChange({ utm: { ...body.utm, campaign } })}
+            />
+            <TextField
+              label="utm_content (optional)"
+              value={body.utm.content}
+              onChange={(content) => onChange({ utm: { ...body.utm, content } })}
+            />
+            <TextField
+              label="utm_term (optional)"
+              value={body.utm.term}
+              onChange={(term) => onChange({ utm: { ...body.utm, term } })}
+            />
+            <p className="text-[11px] leading-snug text-slate-400">
+              Added at export only. Unsubscribe and view-in-browser links, merge tags,
+              <code> mailto:</code>, <code>tel:</code> and anchors are always left alone, and an
+              existing <code>utm_*</code> on a link is never overwritten.
+            </p>
+          </>
+        )}
+      </Section>
+
       <Section title="Footer">
         <ToggleField
           label="Show footer"

@@ -23,7 +23,8 @@ export function esc(value: string): string {
 export function safeUrl(url: string): string {
   const trimmed = (url || '').trim();
   if (!trimmed) return '';
-  if (/^(https?:|mailto:|tel:|#|\/\/|\{\{)/i.test(trimmed)) return trimmed;
+  // `{{tag}}` and `*|TAG|*` are merge tags an ESP fills in, not broken links
+  if (/^(https?:|mailto:|tel:|#|\/\/|\{\{|\*\|)/i.test(trimmed)) return trimmed;
   if (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(trimmed)) return trimmed;
   // relative or bare domains
   if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return '';

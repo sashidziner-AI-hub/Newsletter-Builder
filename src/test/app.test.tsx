@@ -140,8 +140,8 @@ describe('App', () => {
   it('exports HTML and previews', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Heading'));
-    fireEvent.click(screen.getByTitle('Export HTML'));
-    const dialog = screen.getByRole('dialog', { name: 'Export HTML' });
+    fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+    const dialog = screen.getByRole('dialog', { name: 'Export' });
     const code = within(dialog).getByRole<HTMLTextAreaElement>('textbox');
     expect(code.value).toContain('<!DOCTYPE html>');
     expect(code.value).toContain('Your heading here');
@@ -360,7 +360,7 @@ describe('App', () => {
       expect(screen.getByText('Hidden on send')).toBeTruthy();
 
       // ...and the export drops it
-      fireEvent.click(screen.getByTitle('Export HTML'));
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
       const html = (screen.getByRole('dialog').querySelector('textarea') as HTMLTextAreaElement).value;
       expect(html).not.toContain('{{unsubscribe_url}}');
     });
@@ -371,6 +371,125 @@ describe('App', () => {
       const alt = screen.getByLabelText('Image alt text');
       fireEvent.change(alt, { target: { value: '' } });
       expect(screen.getByText(/Required/)).toBeTruthy();
+    });
+  });
+
+  describe('merge tags, UTM and plain text (2A)', () => {
+    /** The text currently shown in the export dialog's active tab. */
+    const exportText = () => {
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const value = (screen.getByRole('dialog').querySelector('textarea') as HTMLTextAreaElement)
+        .value;
+      fireEvent.click(screen.getByLabelText('Close'));
+      return value;
+    };
+
+    const openSettings = () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByText('Email settings')).toBeTruthy();
+    };
+
+    it('inserts a merge tag into a heading from the tag menu', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+
+      const field = screen.getByLabelText('Heading text') as HTMLTextAreaElement;
+      fireEvent.change(field, { target: { value: 'Hello ' } });
+      field.setSelectionRange(6, 6);
+
+      // the panel's insert-tag menu
+      fireEvent.click(screen.getAllByLabelText('Insert a merge tag')[0]);
+      fireEvent.click(screen.getByText('First name'));
+
+      expect((screen.getByLabelText('Heading text') as HTMLTextAreaElement).value).toBe(
+        'Hello {{first_name}}',
+      );
+    });
+
+    it('switching format changes the export but not the stored content', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'Hello {{first_name}}' },
+      });
+
+      expect(exportText()).toContain('Hello {{first_name}}');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Merge tags'));
+      fireEvent.change(screen.getByLabelText('Merge tag format'), {
+        target: { value: 'mailchimp' },
+      });
+
+      // the export is converted...
+      const html = exportText();
+      expect(html).toContain('Hello *|FNAME|*');
+      expect(html).not.toContain('{{first_name}}');
+
+      // ...while the stored block is untouched
+      const heading = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'heading')!;
+      expect((heading.values as { text: string }).text).toBe('Hello {{first_name}}');
+    });
+
+    it('UTM is off by default and tags links once enabled, sparing unsubscribe', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Footer'));
+      fireEvent.click(screen.getByTitle('Add Button'));
+
+      expect(s().design.body.utm.enabled).toBe(false);
+      expect(exportText()).not.toContain('utm_source');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Link tracking'));
+      fireEvent.click(screen.getByRole('switch', { name: 'Add UTM parameters' }));
+      fireEvent.change(screen.getByLabelText('utm_source'), { target: { value: 'newsletter' } });
+
+      const html = exportText();
+      expect(html).toContain('utm_source=newsletter');
+      expect(html).toContain('utm_medium=email');
+      // the unsubscribe link is left exactly as it was
+      expect(html).toContain('href="{{unsubscribe_url}}"');
+      expect(html).not.toContain('{{unsubscribe_url}}?utm');
+    });
+
+    it('offers a plain-text tab with no HTML in it', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'A plain heading' },
+      });
+
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByText('Plain text'));
+
+      const value = (
+        within(dialog).getByLabelText('Exported plain text') as HTMLTextAreaElement
+      ).value;
+      expect(value).toContain('A plain heading');
+      expect(value).not.toMatch(/<\/?[a-z][^>]*>/i);
+    });
+
+    it('sample data previews on the canvas but never in the export', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'Hi {{first_name}}' },
+      });
+
+      const canvas = () => screen.getByRole('main').innerHTML;
+      expect(canvas()).toContain('{{first_name}}');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Merge tags'));
+      fireEvent.click(screen.getByRole('switch', { name: 'Preview with sample data' }));
+
+      expect(canvas()).toContain('Hi John');
+      expect(canvas()).not.toContain('{{first_name}}');
+      // the export still carries the tag
+      expect(exportText()).toContain('Hi {{first_name}}');
     });
   });
 

@@ -5,6 +5,7 @@ import StarterKit from '@tiptap/starter-kit';
 import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Color } from '@tiptap/extension-color';
+import { Link } from '@tiptap/extension-link';
 import {
   AlignCenter,
   AlignLeft,
@@ -18,6 +19,30 @@ import {
   Strikethrough,
   Underline as UnderlineIcon,
 } from 'lucide-react';
+import { MergeTagMenu } from './fields';
+
+/**
+ * The bundled Link mark plus a `noTrack` attribute, written out as
+ * `data-no-track`. The export boundary reads it to skip this one link and then
+ * strips the attribute, so it never reaches the email.
+ */
+const TrackableLink = Link.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      noTrack: {
+        default: null,
+        parseHTML: (el: HTMLElement) => (el.hasAttribute('data-no-track') ? '1' : null),
+        renderHTML: (attrs: Record<string, unknown>) =>
+          attrs.noTrack ? { 'data-no-track': '1' } : {},
+      },
+    };
+  },
+}).configure({
+  openOnClick: false,
+  autolink: true,
+  HTMLAttributes: { rel: 'noopener noreferrer' },
+});
 
 function Btn({
   active,
@@ -51,6 +76,7 @@ function Btn({
 function Toolbar({ editor }: { editor: Editor }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState('');
+  const [linkNoTrack, setLinkNoTrack] = useState(false);
 
   const s = useEditorState({
     editor,
@@ -70,14 +96,17 @@ function Toolbar({ editor }: { editor: Editor }) {
   });
 
   const openLink = () => {
-    setLinkValue((editor.getAttributes('link').href as string | undefined) ?? 'https://');
+    const attrs = editor.getAttributes('link');
+    setLinkValue((attrs.href as string | undefined) ?? 'https://');
+    setLinkNoTrack(attrs.noTrack === '1');
     setLinkOpen(true);
   };
   const applyLink = () => {
     const href = linkValue.trim();
     const chain = editor.chain().focus().extendMarkRange('link');
     if (!href || href === 'https://') chain.unsetLink().run();
-    else chain.setLink({ href }).run();
+    // setLink's published types do not know about TrackableLink's extra attribute
+    else chain.setLink({ href, noTrack: linkNoTrack ? '1' : null } as unknown as { href: string }).run();
     setLinkOpen(false);
   };
 
@@ -126,6 +155,9 @@ function Toolbar({ editor }: { editor: Editor }) {
             onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
           />
         </label>
+        <span className="mx-0.5 h-4 w-px bg-slate-300" />
+        <MergeTagMenu onInsert={(tag) => editor.chain().focus().insertContent(tag).run()} />
+        <span className="mx-0.5 h-4 w-px bg-slate-300" />
         <Btn
           title="Clear formatting"
           onClick={() => editor.chain().focus().unsetAllMarks().unsetColor().run()}
@@ -163,6 +195,15 @@ function Toolbar({ editor }: { editor: Editor }) {
           >
             Cancel
           </button>
+          <label className="flex shrink-0 cursor-pointer items-center gap-1" title="Leave this link out of UTM tagging">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+              checked={linkNoTrack}
+              onChange={(e) => setLinkNoTrack(e.target.checked)}
+            />
+            <span className="text-[11px] text-slate-500">No tracking</span>
+          </label>
         </div>
       )}
     </div>
@@ -178,8 +219,10 @@ export function RichTextEditor({ value, onChange }: { value: string; onChange: (
         code: false,
         codeBlock: false,
         horizontalRule: false,
-        link: { openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener noreferrer' } },
+        // replaced by TrackableLink, which carries the per-link opt-out
+        link: false,
       }),
+      TrackableLink,
       TextAlign.configure({ types: ['paragraph'] }),
       TextStyle,
       Color,

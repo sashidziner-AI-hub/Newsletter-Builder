@@ -5,7 +5,8 @@ import type { Block, BlockType, Brand, Design, Device, Row, Selection, BodySetti
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
-import { listBrands, saveBrands } from './lib/storage';
+import { defaultSampleData } from './lib/merge';
+import { listBrands, loadSampleData, saveBrands, saveSampleData } from './lib/storage';
 
 const HISTORY_LIMIT = 100;
 const COALESCE_MS = 900;
@@ -21,6 +22,12 @@ interface EditorState {
   lastCoalesce: { key: string; at: number } | null;
   /** bumps whenever a whole design is loaded, so editors can reset their internal state */
   revision: number;
+
+  /** merge-tag preview: editor-only, never part of the design */
+  showSampleData: boolean;
+  sampleData: Record<string, string>;
+  setShowSampleData: (on: boolean) => void;
+  setSampleData: (values: Record<string, string>) => void;
 
   select: (s: Selection) => void;
   setDevice: (d: Device) => void;
@@ -108,6 +115,14 @@ export const useEditor = create<EditorState>((set, get) => {
 
     select: (selection) => set({ selection }),
     setDevice: (device) => set({ device }),
+
+    showSampleData: false,
+    sampleData: { ...defaultSampleData(), ...(loadSampleData() ?? {}) },
+    setShowSampleData: (showSampleData) => set({ showSampleData }),
+    setSampleData: (sampleData) => {
+      set({ sampleData });
+      saveSampleData(sampleData);
+    },
 
     addRow: (layout, index) => {
       const row = createRow(layout);
@@ -374,4 +389,14 @@ export function useActiveBrand(): Brand {
 export function useAccessibleBrands(): Brand[] {
   const brands = useEditor((s) => s.brands);
   return useMemo(() => getAccessibleBrands(null, brands), [brands]);
+}
+
+/**
+ * The sample values to render with, or null when the preview toggle is off.
+ * Null means "show the merge tags themselves".
+ */
+export function useSampleData(): Record<string, string> | null {
+  const on = useEditor((s) => s.showSampleData);
+  const values = useEditor((s) => s.sampleData);
+  return on ? values : null;
 }

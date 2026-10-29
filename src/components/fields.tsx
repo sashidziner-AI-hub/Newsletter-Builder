@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Link2, Link2Off, X } from 'lucide-react';
+import { useRef, useState, type ReactNode } from 'react';
+import { AlignCenter, AlignLeft, AlignRight, Braces, ChevronDown, Link2, Link2Off, X } from 'lucide-react';
 import type { Align, BrandColors, Padding } from '../types';
 import { isBrandToken, resolveToken, tokenLabel } from '../lib/brand';
+import { isMergeTagOnly, MERGE_TAGS } from '../lib/merge';
 import { useActiveBrand } from '../store';
 
 const inputCls =
@@ -131,6 +132,163 @@ export function NumberField({
         value={value}
         onChange={(e) => set(parseFloat(e.target.value))}
       />
+    </div>
+  );
+}
+
+/* ======================================================= merge tags (2A) */
+
+/**
+ * Insert-tag dropdown. Hands the host the canonical `{{tag}}` form; the export
+ * boundary rewrites it into whichever ESP format the email is set to.
+ */
+export function MergeTagMenu({ onInsert }: { onInsert: (tag: string) => void }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        title="Insert a merge tag"
+        aria-label="Insert a merge tag"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+      >
+        <Braces size={12} /> Tag
+      </button>
+      {open && (
+        <>
+          {/* click-away */}
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-30 mt-1 w-60 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+            {MERGE_TAGS.map((t) => (
+              <button
+                key={t.tag}
+                type="button"
+                onClick={() => {
+                  onInsert(`{{${t.tag}}}`);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100"
+              >
+                <span>{t.label}</span>
+                <code className="shrink-0 text-[10px] text-slate-400">{`{{${t.tag}}}`}</code>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** A text field with an insert-tag menu that writes at the caret. */
+export function TagTextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  multiline,
+  rows = 3,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  multiline?: boolean;
+  rows?: number;
+  hint?: string;
+}) {
+  const ref = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+
+  const insert = (tag: string) => {
+    const el = ref.current;
+    if (!el) return onChange(value + tag);
+    const start = el.selectionStart ?? value.length;
+    const end = el.selectionEnd ?? value.length;
+    onChange(value.slice(0, start) + tag + value.slice(end));
+    // put the caret after the tag once React has re-rendered
+    requestAnimationFrame(() => {
+      el.focus();
+      const at = start + tag.length;
+      el.setSelectionRange(at, at);
+    });
+  };
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600">{label}</span>
+        <MergeTagMenu onInsert={insert} />
+      </div>
+      {multiline ? (
+        <textarea
+          ref={ref}
+          aria-label={label}
+          className={inputCls}
+          rows={rows}
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : (
+        <input
+          ref={ref}
+          aria-label={label}
+          className={inputCls}
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+      {hint && <span className="mt-1 block text-[11px] leading-snug text-slate-400">{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * A URL field with a per-link tracking opt-out. UTM parameters are added at
+ * export time, so the stored URL stays exactly as typed either way.
+ */
+export function LinkField({
+  label = 'Link URL',
+  value,
+  onChange,
+  noTrack,
+  onNoTrack,
+  placeholder = 'https://…',
+  hint,
+}: {
+  label?: string;
+  value: string;
+  onChange: (v: string) => void;
+  noTrack?: boolean;
+  onNoTrack?: (v: boolean) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  const isTag = isMergeTagOnly(value);
+  return (
+    <div>
+      <TextField label={label} value={value} onChange={onChange} placeholder={placeholder} hint={hint} />
+      {onNoTrack && !isTag && (
+        <label className="mt-1.5 flex cursor-pointer items-center gap-1.5">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-slate-300 accent-brand-600"
+            checked={noTrack === true}
+            onChange={(e) => onNoTrack(e.target.checked)}
+          />
+          <span className="text-[11px] text-slate-500">Don&rsquo;t add tracking</span>
+        </label>
+      )}
+      {isTag && (
+        <span className="mt-1 block text-[11px] leading-snug text-slate-400">
+          A merge tag — your ESP fills this in, and link tracking never touches it.
+        </span>
+      )}
     </div>
   );
 }

@@ -4,9 +4,9 @@ import DOMPurify from 'dompurify';
 import { Copy, GripVertical, Trash2 } from 'lucide-react';
 import type { Block, BodySettings, Column, Design, Device, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
-import { resolveDesign } from '../lib/brand';
+import { resolvedDesign } from '../lib/output';
 import { columnWidths, renderBlock } from '../lib/render';
-import { useActiveBrand, useEditor } from '../store';
+import { useActiveBrand, useEditor, useSampleData } from '../store';
 import { DropLine, useDropHint } from './dnd';
 import { DELETE_BLOCK, DELETE_ROW, useConfirm } from './ConfirmDialog';
 
@@ -329,14 +329,19 @@ function EndZone({ empty }: { empty: boolean }) {
 export function Canvas() {
   const raw = useEditor((s) => s.design);
   const brand = useActiveBrand();
+  const sampleData = useSampleData();
   const device = useEditor((s) => s.device);
   const selection = useEditor((s) => s.selection);
   const select = useEditor((s) => s.select);
   const selectedBlockId = selection.kind === 'block' ? selection.id : null;
 
-  // The canvas renders a token-resolved copy, so switching brands re-themes it
-  // live. 'preview' mode may use uploaded logos; exports never do.
-  const design = useMemo(() => resolveDesign(raw, brand, 'preview'), [raw, brand]);
+  // The canvas renders a resolved copy, so switching brands re-themes it live.
+  // 'preview' mode may use uploaded logos and never applies UTM; with the sample
+  // data toggle on, merge tags show their sample values instead.
+  const design = useMemo(
+    () => resolvedDesign(raw, brand, 'preview', { sampleData }),
+    [raw, brand, sampleData],
+  );
 
   return (
     <main

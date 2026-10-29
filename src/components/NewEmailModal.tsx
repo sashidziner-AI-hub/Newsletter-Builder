@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { FilePlus2 } from 'lucide-react';
 import type { Brand, Design } from '../types';
-import { resolveDesign } from '../lib/brand';
+import { resolvedDesign } from '../lib/output';
 import { emptyDesign } from '../lib/defaults';
 import { PRESETS, type Preset } from '../lib/presets';
 import { renderDesign } from '../lib/render';
@@ -21,7 +21,7 @@ const THUMB_HEIGHT = 240;
  */
 function PresetThumb({ design, brand }: { design: Design; brand: Brand }) {
   const html = useMemo(
-    () => renderDesign(resolveDesign(design, brand, 'preview')),
+    () => renderDesign(resolvedDesign(design, brand, 'preview')),
     [design, brand],
   );
   const scale = THUMB_WIDTH / DESIGN_WIDTH;

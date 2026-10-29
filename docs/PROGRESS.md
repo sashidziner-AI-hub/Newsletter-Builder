@@ -292,3 +292,117 @@ page frame; and the placeholder audit flags, then clears.
 One note on the image assertion: the original **Image block** emits `border:0` in its inline
 style rather than a `border="0"` attribute (only the 1B composite blocks use the attribute).
 The test accepts either, since refactoring that renderer was out of scope.
+
+---
+
+## Feature 2A — Merge tags, UTM tagger, plain text — done (2026-10-29)
+
+Three things an email needs before it can actually be sent: personalisation that matches
+whatever ESP you use, link tracking, and a plain-text alternative. All three happen **at the
+export boundary**, so the stored design stays clean and portable.
+
+### One boundary, extended — not a second pipeline
+
+`resolveForOutput()` (`src/lib/output.ts`) *composes* 1A's `resolveDesign()`. All five
+consumers switched to it: `Canvas.tsx`, `Modals.tsx` (preview + export), `NewEmailModal.tsx`
+and `TopBar.tsx` (JSON). `resolveDesign()` is unchanged and still used directly by the brand
+tests.
+
+```
+design ──resolveDesign──> brand tokens gone
+       ──addUtm──────────> links tagged      (export mode only)
+       ──formatMergeTags─> ESP tag spelling
+       ──renderDesign────> HTML
+       ──toPlainText─────> .txt
+```
+
+**Order matters.** UTM runs while tags are still canonical `{{tag}}`, so "is this URL nothing
+but a merge tag?" stays one regex instead of a per-format problem.
+
+### Merge tags
+
+Designs **always** store `{{tag}}`; the format is applied on the way out, so switching ESP
+never edits content. Built-ins: `first_name`, `last_name`, `company`, `email`,
+`unsubscribe_url`, `view_in_browser_url`.
+
+| canonical | Mailchimp | HubSpot |
+|---|---|---|
+| `first_name` | `*\|FNAME\|*` | `{{ contact.firstname }}` |
+| `last_name` | `*\|LNAME\|*` | `{{ contact.lastname }}` |
+| `company` | `*\|COMPANY\|*` | `{{ contact.company }}` |
+| `email` | `*\|EMAIL\|*` | `{{ contact.email }}` |
+| `unsubscribe_url` | `*\|UNSUB\|*` | `{{ unsubscribe_link }}` |
+| `view_in_browser_url` | `*\|ARCHIVE\|*` | `{{ view_as_page_link }}` |
+
+Real ESP spellings, not a naive uppercase — `*|FIRST_NAME|*` is not a Mailchimp tag. An
+unknown tag falls back to uppercase (Mailchimp) or `contact.<tag>` (HubSpot). Custom format
+takes a prefix and suffix. `curly` is the default, which makes the whole step an identity
+transform — that is why all 266 pre-2A tests stayed green unchanged.
+
+Insert-tag menus sit on the Text editor toolbar, Heading text, Button label, subject and
+preheader, and write at the caret. **Sample-data preview** lives in the store and
+`localStorage` (`email-builder:sample:v1`), never in the design, so it cannot reach an export
+or a saved template.
+
+### UTM tagger
+
+Off by default. `utm_medium` defaults to `email`, and the campaign defaults to
+`slugify(body.title)` the first time it is enabled. Applied **only** when
+`mode === 'export'`, so the canvas and preset thumbnails stay clean — Preview already uses
+`'export'`, so its "this is the exact HTML that will be exported" claim stays true.
+
+`addUtm()` parses by hand rather than with `new URL()`, which throws on relative input. It
+preserves an existing query string and `#hash`, and **never overwrites a `utm_*` the link
+already carries**. Skipped: non-`http(s)` (`mailto:`, `tel:`, `#anchor`, relative),
+merge-tag-only URLs, anything containing `{{unsubscribe_url}}` or `{{view_in_browser_url}}`,
+and any link with its per-link opt-out set.
+
+Per-link opt-out is a `noTrack` flag on every discrete link, plus `data-no-track="1"` on
+rich-text anchors — set from a checkbox in the link dialog via a small `Link.extend()`, and
+**stripped on export** so it never ships (stripped even when tracking is off).
+`@tiptap/extension-link` was already installed as a transitive dependency at the same
+version; 2A declares it explicitly rather than importing an undeclared package.
+
+The export dialog shows *"UTM added to N links, skipped M"*. The skipped count deliberately
+includes the untagged unsubscribe link rather than ignoring it, so the numbers add up to
+something a sender can reconcile.
+
+### Plain text
+
+`toPlainText()` runs on the **already resolved** design, so URLs carry their UTM parameters
+and tags carry the chosen format. Headings on their own line, paragraphs blank-line
+separated, links as `text (url)`, Buttons as `Label: url`, Article items as title + excerpt +
+url, Divider as `----------`, images skipped unless alt text is all the block has, Menu and
+Social as dash lists, Footer only when `showFooter` is on. Wrapped at 72 characters, and a
+URL longer than that goes on its own line rather than being broken — a split URL is an
+unclickable URL.
+
+The export dialog is now **Export** with **HTML | Plain text** tabs, each with its own Copy
+and Download (`.html` / `.txt`). The image audit only applies to the HTML tab.
+
+### `safeUrl()`
+
+Already tolerated `{{tag}}`; `*|TAG|*` happened to survive through its bare-domain fallback.
+2A makes that explicit by adding `*|` to the whitelist, so a Mailchimp-format unsubscribe
+href is passed deliberately rather than by accident.
+
+### Export sizes, all 8 presets, UTM on
+
+HTML 8.0–17.8 KB, plain text 0.7–1.7 KB. Verified across all four tag formats: no stray
+`{{` in Mailchimp output, no stray `*|` in curly output, no double `?` on any tagged URL, no
+markup in any `.txt`, and the unsubscribe link untagged in every format.
+
+### Known gaps
+
+- The ESP tag table covers the six built-ins. A seventh tag typed by hand still works via
+  the generic fallback, but will not match a bespoke ESP field name — the table in
+  `src/lib/merge.ts` is the single place to extend.
+- Sample values are per-browser, so a teammate opening the same template sees their own.
+- `view_in_browser_url` is offered as a tag but no preset uses it yet.
+
+### Tests
+
+`src/test/utm.test.ts` (25), `src/test/merge.test.ts` (25), `src/test/plaintext.test.ts` (34)
+— including **golden output** for the Newsletter and Cold outreach presets — plus a
+`merge tags, UTM and plain text (2A)` block in `src/test/app.test.tsx` (5) covering the three
+acceptance flows end to end. Suite: **354 passing** (was 266), `tsc --noEmit` clean.

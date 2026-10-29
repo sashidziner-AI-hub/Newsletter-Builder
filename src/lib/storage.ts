@@ -6,6 +6,7 @@ import { uid } from './util';
 const DRAFT_KEY = 'email-builder:draft:v1';
 const TEMPLATES_KEY = 'email-builder:templates:v1';
 const BRANDS_KEY = 'email-builder:brands:v1';
+const SAMPLE_KEY = 'email-builder:sample:v1';
 
 export interface SavedTemplate {
   id: string;
@@ -115,4 +116,25 @@ export function listBrands(): Brand[] {
 
 export function saveBrands(brands: Brand[]): boolean {
   return write(BRANDS_KEY, brands);
+}
+
+/* -------------------------------------------------------------- sample data */
+
+/**
+ * Merge-tag sample values for the editor's preview toggle. Deliberately kept
+ * out of the design: they are a per-user convenience and must never reach an
+ * export or a saved template.
+ */
+export function loadSampleData(): Record<string, string> | null {
+  const raw = read<Record<string, unknown>>(SAMPLE_KEY);
+  if (!raw || typeof raw !== 'object') return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
+export function saveSampleData(values: Record<string, string>): boolean {
+  return write(SAMPLE_KEY, values);
 }

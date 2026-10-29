@@ -418,6 +418,10 @@ export function defaultBody(): BodySettings {
     preheader: '',
     title: 'Untitled email',
     showFooter: true,
+    // curly is the canonical form, so the default export is an identity transform
+    mergeFormat: 'curly',
+    mergeCustom: { prefix: '{{', suffix: '}}' },
+    utm: { enabled: false, source: '', medium: 'email', campaign: '', content: '', term: '' },
   };
 }
 

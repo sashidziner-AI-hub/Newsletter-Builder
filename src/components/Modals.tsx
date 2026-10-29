@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Download, Monitor, Smartphone, Trash2, X } from 'lucide-react';
 import type { Device } from '../types';
 import { auditImageSources } from '../lib/audit';
-import { resolveDesign } from '../lib/brand';
+import { resolveForOutput, resolvedDesign } from '../lib/output';
+import { toPlainText } from '../lib/plaintext';
 import { renderDesign } from '../lib/render';
 import { downloadFile, slugify } from '../lib/util';
 import {
@@ -75,8 +76,9 @@ export function PreviewModal({ onClose }: { onClose: () => void }) {
   const design = useEditor((s) => s.design);
   const brand = useActiveBrand();
   const [device, setDevice] = useState<Device>('desktop');
-  // the preview is the export, so it resolves tokens the same way
-  const html = useMemo(() => renderDesign(resolveDesign(design, brand, 'export')), [design, brand]);
+  // the preview is the export, so it goes through the same boundary: brand
+  // tokens, UTM and merge-tag formatting all included
+  const html = useMemo(() => renderDesign(resolvedDesign(design, brand, 'export')), [design, brand]);
 
   return (
     <Modal title="Preview" onClose={onClose} wide>
@@ -116,27 +118,61 @@ export function PreviewModal({ onClose }: { onClose: () => void }) {
 export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; notify: (m: string) => void }) {
   const design = useEditor((s) => s.design);
   const brand = useActiveBrand();
-  const html = useMemo(() => renderDesign(resolveDesign(design, brand, 'export')), [design, brand]);
-  const kb = Math.round((new Blob([html]).size / 1024) * 10) / 10;
+  const [tab, setTab] = useState<'html' | 'text'>('html');
+
+  // one boundary pass gives both outputs and the UTM counts
+  const out = useMemo(() => resolveForOutput(design, brand, 'export'), [design, brand]);
+  const html = useMemo(() => renderDesign(out.design), [out]);
+  const plain = useMemo(() => toPlainText(out.design), [out]);
+
+  const body = tab === 'html' ? html : plain;
+  const kb = Math.round((new Blob([body]).size / 1024) * 10) / 10;
   const images = useMemo(() => auditImageSources(html), [html]);
+  const utmOn = design.body.utm.enabled;
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(html);
-      notify('HTML copied to clipboard');
+      await navigator.clipboard.writeText(body);
+      notify(tab === 'html' ? 'HTML copied to clipboard' : 'Plain text copied to clipboard');
     } catch {
-      notify('Copy failed — select the code and copy manually');
+      notify('Copy failed — select the text and copy manually');
     }
   };
 
+  const download = () =>
+    tab === 'html'
+      ? downloadFile(`${slugify(design.body.title)}.html`, html, 'text/html')
+      : downloadFile(`${slugify(design.body.title)}.txt`, plain, 'text/plain');
+
   return (
-    <Modal title="Export HTML" onClose={onClose} wide>
+    <Modal title="Export" onClose={onClose} wide>
+      <div className="flex gap-1 border-b border-slate-200 px-5 pt-2">
+        {(['html', 'text'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className={`border-b-2 px-3 py-2 text-sm font-medium ${
+              tab === t ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {t === 'html' ? 'HTML' : 'Plain text'}
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-3">
         <div className="text-xs text-slate-500">
           {kb} KB
-          {kb > 100 && (
+          {tab === 'html' && kb > 100 && (
             <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
               Gmail clips emails larger than ~102 KB — reduce embedded images or content.
+            </span>
+          )}
+          {utmOn && (
+            <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
+              UTM added to {out.utm.added} {out.utm.added === 1 ? 'link' : 'links'}, skipped{' '}
+              {out.utm.skipped}
             </span>
           )}
         </div>
@@ -144,16 +180,12 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
           <button type="button" className={ghostBtn} onClick={copy}>
             <Copy size={15} /> Copy
           </button>
-          <button
-            type="button"
-            className={primaryBtn}
-            onClick={() => downloadFile(`${slugify(design.body.title)}.html`, html, 'text/html')}
-          >
-            <Download size={15} /> Download .html
+          <button type="button" className={primaryBtn} onClick={download}>
+            <Download size={15} /> Download {tab === 'html' ? '.html' : '.txt'}
           </button>
         </div>
       </div>
-      {!images.ok && (
+      {tab === 'html' && !images.ok && (
         <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-900">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <div>
@@ -184,9 +216,12 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
       )}
       <textarea
         readOnly
+        aria-label={tab === 'html' ? 'Exported HTML' : 'Exported plain text'}
         spellCheck={false}
-        value={html}
-        className="min-h-[50vh] flex-1 resize-none bg-slate-900 p-4 font-mono text-xs leading-relaxed text-slate-100 focus:outline-none"
+        value={body}
+        className={`min-h-[50vh] flex-1 resize-none p-4 font-mono text-xs leading-relaxed focus:outline-none ${
+          tab === 'html' ? 'bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-800'
+        }`}
         onFocus={(e) => e.currentTarget.select()}
       />
     </Modal>

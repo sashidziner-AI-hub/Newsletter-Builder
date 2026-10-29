@@ -48,6 +48,8 @@ export interface ImageValues {
   src: string;
   alt: string;
   href: string;
+  /** exclude this link from UTM tagging */
+  noTrack?: boolean;
   width: number; // percent of the available width
   align: Align;
   borderRadius: number;
@@ -57,6 +59,7 @@ export interface ImageValues {
 export interface ButtonValues {
   label: string;
   href: string;
+  noTrack?: boolean;
   bgColor: string;
   color: string;
   fontSize: number;
@@ -85,6 +88,7 @@ export interface MenuItem {
   id: string;
   label: string;
   href: string;
+  noTrack?: boolean;
 }
 
 export interface MenuValues {
@@ -118,6 +122,7 @@ export interface SocialItem {
   network: SocialNetwork;
   href: string;
   iconUrl: string; // optional custom hosted PNG
+  noTrack?: boolean;
 }
 
 export interface SocialValues {
@@ -133,6 +138,7 @@ export interface SocialValues {
 
 export interface VideoValues {
   url: string;
+  noTrack?: boolean;
   thumbnail: string; // optional override (needed for Vimeo)
   alt: string;
   width: number;
@@ -155,6 +161,7 @@ export interface NavLink {
   id: string;
   label: string;
   href: string;
+  noTrack?: boolean;
 }
 
 export interface HeaderValues {
@@ -192,6 +199,7 @@ export interface HeroCard {
   text: string;
   linkLabel: string;
   linkHref: string;
+  noTrack?: boolean;
 }
 
 export interface HeroValues {
@@ -210,6 +218,7 @@ export interface HeroValues {
   imageAlt: string;
   ctaLabel: string;
   ctaHref: string;
+  ctaNoTrack?: boolean;
   ctaStyle: 'filled' | 'outline';
   ctaColor: string;
   ctaTextColor: string;
@@ -262,6 +271,7 @@ export interface ArticleItem {
   excerpt: string;
   readMoreLabel: string;
   readMoreHref: string;
+  noTrack?: boolean;
 }
 
 export interface ArticleListValues {
@@ -314,6 +324,29 @@ export interface Row {
   columns: Column[];
 }
 
+/* --------------------------------------------- merge tags + tracking (2A) */
+
+/**
+ * Designs always store merge tags in the canonical `{{tag}}` form. The chosen
+ * format is applied at the export boundary, so switching ESP never rewrites
+ * stored content.
+ */
+export type MergeFormat = 'curly' | 'mailchimp' | 'hubspot' | 'custom';
+
+export interface MergeCustomFormat {
+  prefix: string;
+  suffix: string;
+}
+
+export interface UtmSettings {
+  enabled: boolean;
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  term: string;
+}
+
 export interface BodySettings {
   bgColor: string;
   contentBgColor: string;
@@ -325,6 +358,11 @@ export interface BodySettings {
   title: string;
   /** when false, footer blocks are skipped in preview and export */
   showFooter: boolean;
+  /** how canonical {{tag}} values are written in the export */
+  mergeFormat: MergeFormat;
+  mergeCustom: MergeCustomFormat;
+  /** UTM parameters, applied to http(s) links at export time only */
+  utm: UtmSettings;
 }
 
 export interface Design {

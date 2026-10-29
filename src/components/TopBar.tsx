@@ -13,7 +13,7 @@ import {
   Undo2,
   Upload,
 } from 'lucide-react';
-import { resolveDesign } from '../lib/brand';
+import { resolvedDesign } from '../lib/output';
 import { normalizeDesign } from '../lib/design-ops';
 import { downloadFile, slugify } from '../lib/util';
 import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
@@ -199,14 +199,14 @@ export function TopBar({
             // exported JSON carries resolved values and absolute URLs, never tokens
             downloadFile(
               `${slugify(design.body.title)}.json`,
-              JSON.stringify(resolveDesign(design, brand, 'export'), null, 2),
+              JSON.stringify(resolvedDesign(design, brand, 'export'), null, 2),
               'application/json',
             )
           }
         >
           <Braces size={17} />
         </IconBtn>
-        <IconBtn title="Export HTML" label="HTML" onClick={() => openModal('html')}>
+        <IconBtn title="Export HTML or plain text" label="Export" onClick={() => openModal('html')}>
           <Code2 size={17} />
         </IconBtn>
         <span className="mx-1.5 h-5 w-px bg-slate-200" />
