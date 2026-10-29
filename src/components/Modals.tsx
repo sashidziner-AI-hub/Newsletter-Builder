@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Copy, Download, Monitor, Smartphone, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Copy, Download, Monitor, Smartphone, Trash2, X } from 'lucide-react';
 import type { Device } from '../types';
+import { auditImageSources } from '../lib/audit';
+import { resolveDesign } from '../lib/brand';
 import { renderDesign } from '../lib/render';
 import { downloadFile, slugify } from '../lib/util';
 import { STARTERS } from '../lib/starters';
@@ -10,7 +12,8 @@ import {
   saveTemplate,
   type SavedTemplate,
 } from '../lib/storage';
-import { useEditor } from '../store';
+import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
+import { useConfirm } from './ConfirmDialog';
 
 export function Modal({
   title,
@@ -71,8 +74,10 @@ const ghostBtn =
 /* ------------------------------------------------------------------ preview */
 export function PreviewModal({ onClose }: { onClose: () => void }) {
   const design = useEditor((s) => s.design);
+  const brand = useActiveBrand();
   const [device, setDevice] = useState<Device>('desktop');
-  const html = useMemo(() => renderDesign(design), [design]);
+  // the preview is the export, so it resolves tokens the same way
+  const html = useMemo(() => renderDesign(resolveDesign(design, brand, 'export')), [design, brand]);
 
   return (
     <Modal title="Preview" onClose={onClose} wide>
@@ -111,8 +116,10 @@ export function PreviewModal({ onClose }: { onClose: () => void }) {
 /* ------------------------------------------------------------------- export */
 export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; notify: (m: string) => void }) {
   const design = useEditor((s) => s.design);
-  const html = useMemo(() => renderDesign(design), [design]);
+  const brand = useActiveBrand();
+  const html = useMemo(() => renderDesign(resolveDesign(design, brand, 'export')), [design, brand]);
   const kb = Math.round((new Blob([html]).size / 1024) * 10) / 10;
+  const images = useMemo(() => auditImageSources(html), [html]);
 
   const copy = async () => {
     try {
@@ -147,6 +154,28 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
           </button>
         </div>
       </div>
+      {!images.ok && (
+        <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-900">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">Images need attention before you send</p>
+            {images.embedded > 0 && (
+              <p className="mt-0.5">
+                {images.embedded} embedded {images.embedded === 1 ? 'image is' : 'images are'} a{' '}
+                <code>data:</code> URI. Gmail and most clients strip these — upload the file to your
+                storage/CDN and paste the https URL instead (brand logos: use the hosted logo URL
+                field).
+              </p>
+            )}
+            {images.insecure.length > 0 && (
+              <p className="mt-0.5">
+                Not served over https: {images.insecure.slice(0, 3).join(', ')}
+                {images.insecure.length > 3 ? ` and ${images.insecure.length - 3} more` : ''}.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       <textarea
         readOnly
         spellCheck={false}
@@ -161,19 +190,48 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
 /* ---------------------------------------------------------------- templates */
 export function TemplatesModal({ onClose, notify }: { onClose: () => void; notify: (m: string) => void }) {
   const design = useEditor((s) => s.design);
+  const brands = useAccessibleBrands();
   const loadDesign = useEditor((s) => s.loadDesign);
   const [tab, setTab] = useState<'mine' | 'starters'>('mine');
   const [list, setList] = useState<SavedTemplate[]>(() => listTemplates());
   const [name, setName] = useState(design.body.title);
 
-  const confirmReplace = () =>
-    design.rows.length === 0 || window.confirm('Replace the current design? Unsaved changes will be lost.');
+  const confirm = useConfirm();
 
-  const save = () => {
-    const saved = saveTemplate(name, design);
+  /** Runs `action` straight away on an empty canvas, otherwise asks first. */
+  const replaceThen = (action: () => void) => {
+    if (design.rows.length === 0) return action();
+    confirm(
+      {
+        title: 'Replace the current design?',
+        message: 'Unsaved changes will be lost.',
+        confirmLabel: 'Replace',
+        danger: true,
+      },
+      action,
+    );
+  };
+
+  const write = (existingId?: string) => {
+    const saved = saveTemplate(name, design, existingId);
     if (!saved) return notify('Could not save — browser storage is full or unavailable');
     setList(listTemplates());
     notify(`Saved "${saved.name}"`);
+  };
+
+  const save = () => {
+    // saving under a name that is already taken used to silently create a duplicate
+    const clash = list.find((t) => t.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (!clash) return write();
+    confirm(
+      {
+        title: `Replace "${clash.name}"?`,
+        message: 'A template with this name already exists. Saving will overwrite it.',
+        confirmLabel: 'Overwrite',
+        danger: true,
+      },
+      () => write(clash.id),
+    );
   };
 
   return (
@@ -218,18 +276,20 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-900">{t.name}</p>
                       <p className="text-xs text-slate-400">
-                        {new Date(t.updatedAt).toLocaleString()} · {t.design.rows.length} rows
+                        {new Date(t.updatedAt).toLocaleString()} · {t.design.rows.length} rows ·{' '}
+                        {brands.find((b) => b.id === t.brandId)?.name ?? 'Default brand'}
                       </p>
                     </div>
                     <button
                       type="button"
                       className={ghostBtn}
-                      onClick={() => {
-                        if (!confirmReplace()) return;
-                        loadDesign(t.design);
-                        notify(`Loaded "${t.name}"`);
-                        onClose();
-                      }}
+                      onClick={() =>
+                        replaceThen(() => {
+                          loadDesign(t.design);
+                          notify(`Loaded "${t.name}"`);
+                          onClose();
+                        })
+                      }
                     >
                       Open
                     </button>
@@ -238,11 +298,20 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
                       title="Delete template"
                       aria-label={`Delete ${t.name}`}
                       className="rounded-md p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                      onClick={() => {
-                        if (!window.confirm(`Delete "${t.name}"?`)) return;
-                        deleteTemplate(t.id);
-                        setList(listTemplates());
-                      }}
+                      onClick={() =>
+                        confirm(
+                          {
+                            title: `Delete "${t.name}"?`,
+                            message: 'This removes the saved template from this browser. It cannot be undone.',
+                            confirmLabel: 'Delete',
+                            danger: true,
+                          },
+                          () => {
+                            deleteTemplate(t.id);
+                            setList(listTemplates());
+                          },
+                        )
+                      }
                     >
                       <Trash2 size={16} />
                     </button>
@@ -260,12 +329,14 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
                 <button
                   type="button"
                   className={`${ghostBtn} mt-3 self-start`}
-                  onClick={() => {
-                    if (!confirmReplace()) return;
-                    loadDesign(s.build());
-                    notify(`Started from "${s.name}"`);
-                    onClose();
-                  }}
+                  onClick={() =>
+                    replaceThen(() => {
+                      // a starter brings content, not a brand — keep the active one
+                      loadDesign({ ...s.build(), brandId: design.brandId });
+                      notify(`Started from "${s.name}"`);
+                      onClose();
+                    })
+                  }
                 >
                   Use this template
                 </button>

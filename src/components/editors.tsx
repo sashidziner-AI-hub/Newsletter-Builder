@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ImagePlus, Plus, Trash2 } from 'lucide-react';
+import { ImagePlus, Plus, RotateCcw, Trash2, Wand2 } from 'lucide-react';
 import type {
   BodySettings,
   ButtonValues,
@@ -17,7 +17,9 @@ import type {
   Block,
 } from '../types';
 import { FONT_STACKS, ROW_LAYOUTS, SOCIAL_NETWORKS } from '../lib/defaults';
+import { readImageFile } from '../lib/image';
 import { uid } from '../lib/util';
+import { useActiveBrand } from '../store';
 import {
   AlignField,
   ColorField,
@@ -40,6 +42,9 @@ interface EditorProps<T extends Block['type'], V> {
 
 const fontOptions = (withInherit: boolean) => [
   ...(withInherit ? [{ value: '', label: 'Same as email' }] : []),
+  // tokens first: these follow the active brand, the stacks below are overrides
+  { value: 'brand.font.body', label: 'Brand — body font' },
+  { value: 'brand.font.heading', label: 'Brand — heading font' },
   ...FONT_STACKS,
 ];
 
@@ -103,30 +108,6 @@ export function TextEditor({ block, set, revision }: EditorProps<'text', TextVal
 /* -------------------------------------------------------------------- image */
 const MAX_UPLOAD_WIDTH = 1200;
 
-function readImageFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Could not read file'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Not a valid image'));
-      img.onload = () => {
-        const scale = Math.min(1, MAX_UPLOAD_WIDTH / img.width);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return reject(new Error('Canvas unavailable'));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-        resolve(canvas.toDataURL(type, 0.86));
-      };
-      img.src = String(reader.result);
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
   const v = block.values;
   const input = useRef<HTMLInputElement>(null);
@@ -138,7 +119,7 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
     setError('');
     if (!file.type.startsWith('image/')) return setError('Please choose an image file.');
     try {
-      set({ src: await readImageFile(file) });
+      set({ src: await readImageFile(file, MAX_UPLOAD_WIDTH) });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed');
     }
@@ -205,11 +186,35 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
 /* ------------------------------------------------------------------- button */
 export function ButtonEditor({ block, set }: EditorProps<'button', ButtonValues>) {
   const v = block.values;
+  const brand = useActiveBrand();
+
+  /** Apply the brand's button tokens. Colours become tokens so they re-theme. */
+  const applyBrandStyle = () => {
+    const b = brand.tokens.button;
+    set({
+      bgColor: 'brand.primary',
+      color: 'brand.content_bg',
+      fontFamily: 'brand.font.body',
+      borderRadius: b.radius,
+      innerPaddingV: b.paddingV,
+      innerPaddingH: b.paddingH,
+      fontWeight: b.weight,
+      ...(b.uppercase ? { label: v.label.toUpperCase() } : {}),
+    });
+  };
+
   return (
     <>
       <Section title="Content">
         <TextField label="Label" value={v.label} onChange={(label) => set({ label })} />
         <TextField label="Link URL" value={v.href} onChange={(href) => set({ href })} placeholder="https://…" />
+        <button
+          type="button"
+          onClick={applyBrandStyle}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-brand-300 bg-brand-50 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+        >
+          <Wand2 size={14} /> Apply {brand.name} button style
+        </button>
       </Section>
       <Section title="Colors">
         <ColorField label="Background" value={v.bgColor} onChange={(bgColor) => set({ bgColor })} />
@@ -582,12 +587,30 @@ export function RowEditor({
 export function BodyEditor({
   body,
   onChange,
+  onResetToBrand,
 }: {
   body: BodySettings;
   onChange: (patch: Partial<BodySettings>) => void;
+  onResetToBrand: () => void;
 }) {
+  const brand = useActiveBrand();
   return (
     <>
+      <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+        <span
+          className="h-5 w-5 shrink-0 rounded border border-slate-300"
+          style={{ background: brand.tokens.colors.primary || '#fff' }}
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-700">{brand.name}</span>
+        <button
+          type="button"
+          title="Put the brand colours and font back into the settings below"
+          onClick={onResetToBrand}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
+        >
+          <RotateCcw size={12} /> Reset to brand
+        </button>
+      </div>
       <Section title="Email">
         <TextField label="Title / subject" value={body.title} onChange={(title) => onChange({ title })} />
         <TextField

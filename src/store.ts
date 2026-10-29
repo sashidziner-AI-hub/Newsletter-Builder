@@ -1,14 +1,19 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { produce } from 'immer';
-import type { Block, BlockType, Design, Device, Row, Selection, BodySettings } from './types';
-import { cloneWithNewIds, createBlock, createRow, emptyDesign } from './lib/defaults';
+import type { Block, BlockType, Brand, Design, Device, Row, Selection, BodySettings } from './types';
+import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
+import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
+import { listBrands, saveBrands } from './lib/storage';
 
 const HISTORY_LIMIT = 100;
 const COALESCE_MS = 900;
 
 interface EditorState {
   design: Design;
+  /** every brand on this browser, archived ones included */
+  brands: Brand[];
   past: Design[];
   future: Design[];
   selection: Selection;
@@ -31,6 +36,15 @@ interface EditorState {
   updateRow: (rowId: string, patch: Partial<Omit<Row, 'id' | 'columns'>>) => void;
   updateBody: (patch: Partial<BodySettings>) => void;
   setRowLayout: (rowId: string, layout: number[]) => void;
+
+  /** re-theme the email; only design.brandId changes, content is untouched */
+  setBrandId: (brandId: string | null) => void;
+  /** put the brand tokens back into the email settings, dropping overrides */
+  resetBodyToBrand: () => void;
+
+  upsertBrand: (brand: Brand) => void;
+  duplicateBrand: (brandId: string) => Brand | null;
+  setBrandArchived: (brandId: string, archived: boolean) => void;
 
   deleteBlock: (blockId: string) => void;
   duplicateBlock: (blockId: string) => void;
@@ -76,8 +90,15 @@ export const useEditor = create<EditorState>((set, get) => {
     }
   }
 
+  /** brands live outside undo history; they are shared across all emails */
+  const writeBrands = (next: Brand[]) => {
+    set({ brands: next });
+    saveBrands(next);
+  };
+
   return {
     design: emptyDesign(),
+    brands: listBrands(),
     past: [],
     future: [],
     selection: { kind: 'body' },
@@ -189,6 +210,55 @@ export const useEditor = create<EditorState>((set, get) => {
       }, `body:${Object.keys(patch).sort().join(',')}`);
     },
 
+    setBrandId: (brandId) => {
+      commit((d) => {
+        d.brandId = brandId;
+      });
+    },
+
+    resetBodyToBrand: () => {
+      const { bgColor, contentBgColor, fontFamily, textColor, linkColor } = defaultBody();
+      commit((d) => {
+        Object.assign(d.body, { bgColor, contentBgColor, fontFamily, textColor, linkColor });
+      });
+    },
+
+    upsertBrand: (brand) => {
+      const next = { ...brand, updatedAt: Date.now() };
+      const list = get().brands;
+      writeBrands(
+        list.some((b) => b.id === next.id)
+          ? list.map((b) => (b.id === next.id ? next : b))
+          : [...list, next],
+      );
+    },
+
+    duplicateBrand: (brandId) => {
+      const source = get().brands.find((b) => b.id === brandId);
+      if (!source) return null;
+      const copy: Brand = {
+        ...emptyBrand(`${source.name} copy`),
+        tokens: JSON.parse(JSON.stringify(source.tokens)),
+        footer: { ...source.footer },
+        social_links: source.social_links.map((l) => ({ ...l })),
+        logo: source.logo,
+        logo_dark: source.logo_dark,
+        logo_url: source.logo_url,
+        logo_dark_url: source.logo_dark_url,
+        website_url: source.website_url,
+      };
+      writeBrands([...get().brands, copy]);
+      return copy;
+    },
+
+    setBrandArchived: (brandId, archived) => {
+      writeBrands(
+        get().brands.map((b) =>
+          b.id === brandId ? { ...b, is_active: !archived, updatedAt: Date.now() } : b,
+        ),
+      );
+    },
+
     setRowLayout: (rowId, layout) => {
       commit((d) => {
         const row = d.rows.find((r) => r.id === rowId);
@@ -289,3 +359,19 @@ export const useEditor = create<EditorState>((set, get) => {
       }),
   };
 });
+
+/**
+ * The brand the current email is themed with. An archived or missing brandId
+ * resolves to the default brand, so an old template never breaks.
+ */
+export function useActiveBrand(): Brand {
+  const brands = useEditor((s) => s.brands);
+  const brandId = useEditor((s) => s.design.brandId);
+  return useMemo(() => resolveBrand(brands, brandId), [brands, brandId]);
+}
+
+/** Brands the current user may use. The only read path the UI should take. */
+export function useAccessibleBrands(): Brand[] {
+  const brands = useEditor((s) => s.brands);
+  return useMemo(() => getAccessibleBrands(null, brands), [brands]);
+}

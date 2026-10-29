@@ -7,8 +7,10 @@ import { Canvas } from './components/Canvas';
 import { RightPanel } from './components/RightPanel';
 import { TopBar } from './components/TopBar';
 import { ExportHtmlModal, PreviewModal, TemplatesModal } from './components/Modals';
+import { BrandsModal } from './components/BrandsModal';
+import { ConfirmProvider, DELETE_BLOCK, DELETE_ROW, useConfirm } from './components/ConfirmDialog';
 
-type ModalName = 'preview' | 'html' | 'templates' | null;
+type ModalName = 'preview' | 'html' | 'templates' | 'brands' | null;
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -16,6 +18,16 @@ function isTypingTarget(el: EventTarget | null): boolean {
 }
 
 export default function App() {
+  // the provider has to sit above the editor so the shortcuts below can use it
+  return (
+    <ConfirmProvider>
+      <Editor />
+    </ConfirmProvider>
+  );
+}
+
+function Editor() {
+  const confirm = useConfirm();
   const [modal, setModal] = useState<ModalName>(null);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<number>(0);
@@ -64,10 +76,12 @@ export default function App() {
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (st.selection.kind === 'block') {
           e.preventDefault();
-          st.deleteBlock(st.selection.id);
+          const id = st.selection.id;
+          confirm(DELETE_BLOCK, () => st.deleteBlock(id));
         } else if (st.selection.kind === 'row') {
           e.preventDefault();
-          st.deleteRow(st.selection.id);
+          const id = st.selection.id;
+          confirm(DELETE_ROW, () => st.deleteRow(id));
         }
       } else if (e.key === 'Escape') {
         st.select({ kind: 'body' });
@@ -75,7 +89,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [modal]);
+  }, [modal, confirm]);
 
   return (
     <div className="flex h-full flex-col">
@@ -91,6 +105,7 @@ export default function App() {
       {modal === 'preview' && <PreviewModal onClose={() => setModal(null)} />}
       {modal === 'html' && <ExportHtmlModal onClose={() => setModal(null)} notify={notify} />}
       {modal === 'templates' && <TemplatesModal onClose={() => setModal(null)} notify={notify} />}
+      {modal === 'brands' && <BrandsModal onClose={() => setModal(null)} notify={notify} />}
 
       {toast && (
         <div

@@ -106,5 +106,8 @@ export function normalizeDesign(input: unknown): Design | null {
     }
     rows.push(row);
   }
-  return { version: 1, body, rows };
+  // Designs saved before brands existed have no brandId; null means "default
+  // brand", and their literal colours are kept exactly as stored.
+  const brandId = typeof raw.brandId === 'string' && raw.brandId ? raw.brandId : null;
+  return { version: 1, brandId, body, rows };
 }

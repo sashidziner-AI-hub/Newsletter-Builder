@@ -184,6 +184,8 @@ export interface BodySettings {
 
 export interface Design {
   version: 1;
+  /** null (or an unknown/archived id) falls back to the default brand */
+  brandId: string | null;
   body: BodySettings;
   rows: Row[];
 }
@@ -194,3 +196,79 @@ export type Selection =
   | { kind: 'block'; id: string };
 
 export type Device = 'desktop' | 'mobile';
+
+/* ---------------------------------------------------------------- brand kit */
+
+/**
+ * A brand token is a string of the form `brand.<path>` stored in place of a hex
+ * colour or a font stack. Tokens are resolved to literal values by
+ * `resolveDesign()` just before rendering, so a design can be re-themed by
+ * swapping `Design.brandId` without rewriting any block. Values that are not
+ * tokens (plain hex, a font stack, a URL) are manual overrides and are left
+ * untouched by a brand switch.
+ */
+export interface BrandColors {
+  primary: string;
+  secondary: string;
+  accent: string;
+  text: string;
+  muted: string;
+  link: string;
+  page_bg: string;
+  content_bg: string;
+  border: string;
+}
+
+export interface BrandFonts {
+  heading: string;
+  body: string;
+}
+
+export interface BrandButton {
+  radius: number;
+  /** inner padding, vertical / horizontal, in px */
+  paddingV: number;
+  paddingH: number;
+  weight: 'normal' | 'bold';
+  uppercase: boolean;
+}
+
+export interface BrandTokens {
+  colors: BrandColors;
+  fonts: BrandFonts;
+  button: BrandButton;
+}
+
+export interface BrandFooter {
+  address: string;
+  legal_text: string;
+  unsubscribe_text: string;
+}
+
+export interface BrandSocialLink {
+  id: string;
+  network: SocialNetwork;
+  url: string;
+}
+
+export interface Brand {
+  id: string;
+  name: string;
+  slug: string;
+  /** downscaled upload, canvas preview only — never used in exported HTML */
+  logo: string;
+  logo_dark: string;
+  /** absolute https URL — this is what the exported HTML uses */
+  logo_url: string;
+  logo_dark_url: string;
+  website_url: string;
+  tokens: BrandTokens;
+  footer: BrandFooter;
+  social_links: BrandSocialLink[];
+  is_active: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** nullable today; becomes a user reference when accounts exist */
+  createdBy: string | null;
+  updatedBy: string | null;
+}

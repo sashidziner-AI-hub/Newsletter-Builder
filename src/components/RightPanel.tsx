@@ -16,6 +16,7 @@ import {
   VideoEditor,
 } from './editors';
 import { BlockIcon } from './icons';
+import { DELETE_BLOCK, DELETE_ROW, useConfirm } from './ConfirmDialog';
 
 function Header({
   icon,
@@ -70,11 +71,13 @@ export function RightPanel() {
   const updateBlock = useEditor((s) => s.updateBlock);
   const updateRow = useEditor((s) => s.updateRow);
   const updateBody = useEditor((s) => s.updateBody);
+  const resetBodyToBrand = useEditor((s) => s.resetBodyToBrand);
   const setRowLayout = useEditor((s) => s.setRowLayout);
   const duplicateBlock = useEditor((s) => s.duplicateBlock);
   const deleteBlock = useEditor((s) => s.deleteBlock);
   const duplicateRow = useEditor((s) => s.duplicateRow);
   const deleteRow = useEditor((s) => s.deleteRow);
+  const confirm = useConfirm();
 
   let header: React.ReactNode;
   let content: React.ReactNode;
@@ -91,7 +94,7 @@ export function RightPanel() {
           title={label}
           subtitle="Content block"
           onDuplicate={() => duplicateBlock(block.id)}
-          onDelete={() => deleteBlock(block.id)}
+          onDelete={() => confirm(DELETE_BLOCK, () => deleteBlock(block.id))}
         />
       );
       switch (block.type) {
@@ -133,7 +136,7 @@ export function RightPanel() {
           title="Row"
           subtitle={`${row.layout.length} column${row.layout.length > 1 ? 's' : ''}`}
           onDuplicate={() => duplicateRow(row.id)}
-          onDelete={() => deleteRow(row.id)}
+          onDelete={() => confirm(DELETE_ROW, () => deleteRow(row.id))}
         />
       );
       content = (
@@ -148,7 +151,7 @@ export function RightPanel() {
 
   if (!content) {
     header = <Header icon={<Settings2 size={17} />} title="Email settings" subtitle="Applies to the whole email" />;
-    content = <BodyEditor body={design.body} onChange={updateBody} />;
+    content = <BodyEditor body={design.body} onChange={updateBody} onResetToBrand={resetBodyToBrand} />;
   }
 
   return (

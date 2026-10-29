@@ -1,15 +1,22 @@
-import type { Design } from '../types';
+import type { Brand, Design } from '../types';
+import { normalizeBrand, veeBrand } from './brand';
 import { normalizeDesign } from './design-ops';
 import { uid } from './util';
 
 const DRAFT_KEY = 'email-builder:draft:v1';
 const TEMPLATES_KEY = 'email-builder:templates:v1';
+const BRANDS_KEY = 'email-builder:brands:v1';
 
 export interface SavedTemplate {
   id: string;
   name: string;
   updatedAt: number;
+  /** mirrors design.brandId; null for templates saved before brands existed */
+  brandId: string | null;
   design: Design;
+  /** nullable today; becomes a user reference when accounts exist */
+  createdBy: string | null;
+  updatedBy: string | null;
 }
 
 function read<T>(key: string): T | null {
@@ -49,7 +56,10 @@ export function listTemplates(): SavedTemplate[] {
         id: t.id,
         name: typeof t.name === 'string' ? t.name : 'Untitled',
         updatedAt: Number(t.updatedAt) || 0,
+        brandId: design.brandId,
         design,
+        createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
+        updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
       });
     }
   }
@@ -58,11 +68,15 @@ export function listTemplates(): SavedTemplate[] {
 
 export function saveTemplate(name: string, design: Design, existingId?: string): SavedTemplate | null {
   const list = listTemplates();
+  const previous = existingId ? list.find((t) => t.id === existingId) : undefined;
   const entry: SavedTemplate = {
     id: existingId ?? uid('tpl'),
     name: name.trim() || 'Untitled',
     updatedAt: Date.now(),
+    brandId: design.brandId,
     design,
+    createdBy: previous?.createdBy ?? null,
+    updatedBy: null,
   };
   const next = [entry, ...list.filter((t) => t.id !== entry.id)];
   return write(TEMPLATES_KEY, next) ? entry : null;
@@ -73,4 +87,32 @@ export function deleteTemplate(id: string): void {
     TEMPLATES_KEY,
     listTemplates().filter((t) => t.id !== id),
   );
+}
+
+/* -------------------------------------------------------------------- brands */
+
+/**
+ * The brand list, seeded with Vee Technologies the first time the app runs.
+ * Archived brands are kept here (is_active: false) and filtered out by
+ * `getAccessibleBrands()`, so a design pointing at one still resolves.
+ */
+export function listBrands(): Brand[] {
+  const raw = read<unknown[]>(BRANDS_KEY);
+  const out: Brand[] = [];
+  if (Array.isArray(raw)) {
+    for (const b of raw) {
+      const brand = normalizeBrand(b);
+      if (brand) out.push(brand);
+    }
+  }
+  if (out.length === 0) {
+    const seeded = [veeBrand()];
+    write(BRANDS_KEY, seeded);
+    return seeded;
+  }
+  return out;
+}
+
+export function saveBrands(brands: Brand[]): boolean {
+  return write(BRANDS_KEY, brands);
 }

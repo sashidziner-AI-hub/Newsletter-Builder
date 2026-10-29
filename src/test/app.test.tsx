@@ -10,6 +10,7 @@ vi.mock('../components/RichTextEditor', () => ({
 
 import App from '../App';
 import { useEditor } from '../store';
+import { emptyBrand, veeBrand } from '../lib/brand';
 
 const s = () => useEditor.getState();
 
@@ -54,12 +55,33 @@ describe('App', () => {
     expect(types).toEqual(['heading', 'text', 'image', 'button', 'divider', 'menu', 'social', 'video', 'html']);
   });
 
-  it('Delete key removes the selected block, Escape selects the email settings', () => {
+  it('Delete key asks first, then removes the selected block', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Button'));
     expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+
+    // the key press only opens the dialog — the block survives until confirmed
     fireEvent.keyDown(window, { key: 'Delete' });
+    expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Delete this block?')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByText('Delete'));
     expect(s().design.rows[0].columns[0].blocks).toHaveLength(0);
+  });
+
+  it('Delete key cancelled keeps the block', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Button'));
+    fireEvent.keyDown(window, { key: 'Delete' });
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Cancel'));
+    expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+  });
+
+  it('Escape selects the email settings', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Button'));
+    fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.getByText('Email settings')).toBeTruthy();
   });
 
@@ -127,5 +149,135 @@ describe('App', () => {
     fireEvent.click(screen.getByText('Starter templates'));
     fireEvent.click(screen.getAllByText('Use this template')[0]);
     expect(s().design.rows.length).toBeGreaterThan(2);
+  });
+
+  describe('replacing a non-empty design', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    afterEach(() => confirmSpy.mockClear());
+
+    const loadSomething = () => {
+      fireEvent.click(screen.getByTitle('Templates'));
+      fireEvent.click(screen.getByText('Starter templates'));
+      fireEvent.click(screen.getAllByText('Use this template')[0]);
+    };
+
+    it('asks in an in-app dialog instead of window.confirm, and cancelling keeps the design', () => {
+      render(<App />);
+      loadSomething();
+      const rows = s().design.rows.length;
+
+      fireEvent.click(screen.getByTitle('New email'));
+
+      // the native dialog must never be used
+      expect(confirmSpy).not.toHaveBeenCalled();
+      const dialog = screen.getByRole('alertdialog');
+      expect(within(dialog).getByText('Replace the current design?')).toBeTruthy();
+
+      fireEvent.click(within(dialog).getByText('Cancel'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(rows);
+    });
+
+    it('performs the action once confirmed', () => {
+      render(<App />);
+      loadSomething();
+      expect(s().design.rows.length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByTitle('New email'));
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Replace'));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(0);
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips the dialog entirely when the canvas is empty', () => {
+      render(<App />);
+      expect(s().design.rows).toHaveLength(0);
+      fireEvent.click(screen.getByTitle('New email'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
+  describe('brand switcher', () => {
+    const acme = () => {
+      const b = emptyBrand('Acme Health');
+      b.id = 'brand_acme';
+      b.tokens.colors.primary = '#0D9488';
+      b.tokens.colors.link = '#0D9488';
+      b.tokens.colors.page_bg = '#ECFDF5';
+      return b;
+    };
+
+    beforeEach(() => {
+      act(() => useEditor.setState({ brands: [veeBrand(), acme()] }));
+      s().resetDesign();
+    });
+
+    it('lists the accessible brands and re-themes the canvas without losing content', () => {
+      render(<App />);
+      // scope colour assertions to the canvas: the property panel also paints
+      // brand swatches, which would match either brand's palette
+      const canvasHtml = () => screen.getByRole('main').innerHTML;
+
+      const switcher = screen.getByLabelText('Brand') as HTMLSelectElement;
+      expect(Array.from(switcher.options).map((o) => o.textContent)).toEqual([
+        'Vee Technologies',
+        'Acme Health',
+      ]);
+
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      act(() => s().updateBlock(s().design.rows[0].columns[0].blocks[0].id, { color: 'brand.primary' }));
+      expect(canvasHtml()).toContain('#F58220');
+
+      const before = s().design.rows;
+      fireEvent.change(switcher, { target: { value: 'brand_acme' } });
+
+      // re-themed...
+      expect(s().design.brandId).toBe('brand_acme');
+      expect(canvasHtml()).toContain('#0D9488');
+      expect(canvasHtml()).not.toContain('#F58220');
+      // ...without touching the content
+      expect(s().design.rows).toEqual(before);
+      expect(within(screen.getByRole('main')).getByText('Your heading here')).toBeTruthy();
+    });
+
+    it('falls back to the default brand when the design points at a missing brand', () => {
+      act(() => s().setBrandId('brand_gone'));
+      render(<App />);
+      expect((screen.getByLabelText('Brand') as HTMLSelectElement).value).toBe('brand_vee');
+    });
+
+    it('opens the brands manager and shows the seeded brand', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Manage brands'));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('Vee Technologies')).toBeTruthy();
+      expect(within(dialog).getByText('New brand')).toBeTruthy();
+    });
+  });
+
+  it('saving over an existing template name overwrites instead of duplicating', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Button'));
+
+    const saveOnce = () => {
+      fireEvent.click(screen.getByTitle('Templates'));
+      fireEvent.click(screen.getByText('Save current design'));
+    };
+    // count saved rows inside the Templates modal only, not the canvas toolbars
+    const savedCount = () =>
+      within(screen.getByRole('dialog')).getAllByLabelText(/^Delete /).length;
+
+    saveOnce();
+    expect(savedCount()).toBe(1);
+    fireEvent.click(screen.getByLabelText('Close'));
+
+    // same name again: must ask, and must not leave two entries behind
+    saveOnce();
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Overwrite')).toBeTruthy();
+    fireEvent.click(within(dialog).getByText('Overwrite'));
+    expect(savedCount()).toBe(1);
   });
 });

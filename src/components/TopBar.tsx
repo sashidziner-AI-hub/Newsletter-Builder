@@ -7,16 +7,19 @@ import {
   FolderOpen,
   Mail,
   Monitor,
+  Palette,
   Redo2,
   Smartphone,
   Undo2,
   Upload,
 } from 'lucide-react';
+import { resolveDesign } from '../lib/brand';
 import { normalizeDesign } from '../lib/design-ops';
 import { downloadFile, slugify } from '../lib/util';
-import { useEditor } from '../store';
+import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
+import { useConfirm } from './ConfirmDialog';
 
-type ModalName = 'preview' | 'html' | 'templates' | null;
+type ModalName = 'preview' | 'html' | 'templates' | 'brands' | null;
 
 function IconBtn({
   title,
@@ -63,20 +66,37 @@ export function TopBar({
   const device = useEditor((s) => s.device);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
-  const { undo, redo, setDevice, updateBody, loadDesign, resetDesign } = useEditor.getState();
+  const { undo, redo, setDevice, updateBody, loadDesign, resetDesign, setBrandId } =
+    useEditor.getState();
+  const brands = useAccessibleBrands();
+  const brand = useActiveBrand();
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const confirmReplace = () =>
-    design.rows.length === 0 || window.confirm('Replace the current design? Unsaved changes will be lost.');
+  const confirm = useConfirm();
+
+  /** Runs `action` straight away on an empty canvas, otherwise asks first. */
+  const replaceThen = (action: () => void) => {
+    if (design.rows.length === 0) return action();
+    confirm(
+      {
+        title: 'Replace the current design?',
+        message: 'Unsaved changes will be lost.',
+        confirmLabel: 'Replace',
+        danger: true,
+      },
+      action,
+    );
+  };
 
   const importJson = async (file?: File) => {
     if (!file) return;
     try {
       const parsed = normalizeDesign(JSON.parse(await file.text()));
       if (!parsed) return notify('That file is not a valid email design JSON');
-      if (!confirmReplace()) return;
-      loadDesign(parsed);
-      notify('Design imported');
+      replaceThen(() => {
+        loadDesign(parsed);
+        notify('Design imported');
+      });
     } catch {
       notify('Could not read that file');
     }
@@ -97,6 +117,34 @@ export function TopBar({
         onChange={(e) => updateBody({ title: e.target.value })}
         className="w-56 rounded-md border border-transparent px-2 py-1 text-sm font-medium text-slate-800 hover:border-slate-300 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       />
+
+      <div className="flex items-center gap-1">
+        <label className="sr-only" htmlFor="brand-switcher">
+          Brand
+        </label>
+        <span
+          aria-hidden="true"
+          className="h-5 w-5 shrink-0 rounded border border-slate-300"
+          style={{ background: brand.tokens.colors.primary || '#fff' }}
+        />
+        <select
+          id="brand-switcher"
+          aria-label="Brand"
+          title="Switching brand re-themes the email without changing its content"
+          value={brand.id}
+          onChange={(e) => setBrandId(e.target.value)}
+          className="max-w-[9rem] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+        >
+          {brands.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        <IconBtn title="Manage brands" onClick={() => openModal('brands')}>
+          <Palette size={17} />
+        </IconBtn>
+      </div>
 
       <div className="mx-auto flex items-center gap-1">
         <IconBtn title="Undo (Ctrl+Z)" onClick={undo} disabled={!canUndo}>
@@ -129,10 +177,7 @@ export function TopBar({
         <IconBtn
           title="New email"
           label="New"
-          onClick={() => {
-            if (!confirmReplace()) return;
-            resetDesign();
-          }}
+          onClick={() => replaceThen(resetDesign)}
         >
           <FilePlus2 size={17} />
         </IconBtn>
@@ -156,7 +201,12 @@ export function TopBar({
           title="Download design JSON"
           label="JSON"
           onClick={() =>
-            downloadFile(`${slugify(design.body.title)}.json`, JSON.stringify(design, null, 2), 'application/json')
+            // exported JSON carries resolved values and absolute URLs, never tokens
+            downloadFile(
+              `${slugify(design.body.title)}.json`,
+              JSON.stringify(resolveDesign(design, brand, 'export'), null, 2),
+              'application/json',
+            )
           }
         >
           <Braces size={17} />

@@ -4,9 +4,11 @@ import DOMPurify from 'dompurify';
 import { Copy, GripVertical, Trash2 } from 'lucide-react';
 import type { Block, BodySettings, Column, Design, Device, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
+import { resolveDesign } from '../lib/brand';
 import { columnWidths, renderBlock } from '../lib/render';
-import { useEditor } from '../store';
+import { useActiveBrand, useEditor } from '../store';
 import { DropLine, useDropHint } from './dnd';
+import { DELETE_BLOCK, DELETE_ROW, useConfirm } from './ConfirmDialog';
 
 const MOBILE_WIDTH = 375;
 
@@ -33,6 +35,7 @@ const BlockView = memo(function BlockView({
   const select = useEditor((s) => s.select);
   const duplicateBlock = useEditor((s) => s.duplicateBlock);
   const deleteBlock = useEditor((s) => s.deleteBlock);
+  const confirm = useConfirm();
   const hint = useDropHint();
 
   const drag = useDraggable({ id: `b:${block.id}`, data: { kind: 'block', blockId: block.id } });
@@ -42,7 +45,7 @@ const BlockView = memo(function BlockView({
   const html = useMemo(
     () =>
       sanitize(
-        renderBlock(block, { version: 1, body, rows: [] }, { colWidth, editor: true }),
+        renderBlock(block, { version: 1, brandId: null, body, rows: [] }, { colWidth, editor: true }),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [block, colWidth, body.fontFamily, body.linkColor, body.textColor],
@@ -97,7 +100,7 @@ const BlockView = memo(function BlockView({
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              deleteBlock(block.id);
+              confirm(DELETE_BLOCK, () => deleteBlock(block.id));
             }}
           >
             <Trash2 size={13} />
@@ -188,6 +191,7 @@ function RowView({
   const select = useEditor((s) => s.select);
   const duplicateRow = useEditor((s) => s.duplicateRow);
   const deleteRow = useEditor((s) => s.deleteRow);
+  const confirm = useConfirm();
   const hint = useDropHint();
 
   const drop = useDroppable({ id: row.id, data: { kind: 'row', rowId: row.id } });
@@ -276,7 +280,7 @@ function RowView({
             className="rounded p-1 hover:bg-white/20"
             onClick={(e) => {
               e.stopPropagation();
-              deleteRow(row.id);
+              confirm(DELETE_ROW, () => deleteRow(row.id));
             }}
           >
             <Trash2 size={13} />
@@ -312,11 +316,16 @@ function EndZone({ empty }: { empty: boolean }) {
 }
 
 export function Canvas() {
-  const design = useEditor((s) => s.design);
+  const raw = useEditor((s) => s.design);
+  const brand = useActiveBrand();
   const device = useEditor((s) => s.device);
   const selection = useEditor((s) => s.selection);
   const select = useEditor((s) => s.select);
   const selectedBlockId = selection.kind === 'block' ? selection.id : null;
+
+  // The canvas renders a token-resolved copy, so switching brands re-themes it
+  // live. 'preview' mode may use uploaded logos; exports never do.
+  const design = useMemo(() => resolveDesign(raw, brand, 'preview'), [raw, brand]);
 
   return (
     <main

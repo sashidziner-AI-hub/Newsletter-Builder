@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Link2, Link2Off } from 'lucide-react';
-import type { Align, Padding } from '../types';
+import { AlignCenter, AlignLeft, AlignRight, ChevronDown, Link2, Link2Off, X } from 'lucide-react';
+import type { Align, BrandColors, Padding } from '../types';
+import { isBrandToken, resolveToken, tokenLabel } from '../lib/brand';
+import { useActiveBrand } from '../store';
 
 const inputCls =
   'w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20';
@@ -135,20 +137,49 @@ export function NumberField({
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
+const expandHex = (v: string) =>
+  v.length === 4 ? `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}` : v;
+
+/** The brand colours offered as one-click swatches, in panel order. */
+const SWATCHES: { key: keyof BrandColors; label: string }[] = [
+  { key: 'primary', label: 'Primary' },
+  { key: 'secondary', label: 'Secondary' },
+  { key: 'accent', label: 'Accent' },
+  { key: 'text', label: 'Text' },
+  { key: 'muted', label: 'Muted' },
+  { key: 'link', label: 'Link' },
+  { key: 'page_bg', label: 'Page background' },
+  { key: 'content_bg', label: 'Content background' },
+  { key: 'border', label: 'Border' },
+];
+
+/**
+ * Colour input that stores either a brand token (`brand.primary`) or a literal
+ * hex override. Picking a swatch stores the token, so the value follows a brand
+ * switch; typing or using the picker stores hex, which a brand switch leaves
+ * alone.
+ */
 export function ColorField({
   label,
   value,
   onChange,
   allowEmpty,
   emptyLabel = 'none',
+  noBrand,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   allowEmpty?: boolean;
   emptyLabel?: string;
+  /** hide the brand swatch row (for colours a brand has no opinion about) */
+  noBrand?: boolean;
 }) {
-  const valid = HEX.test(value);
+  const brand = useActiveBrand();
+  const token = isBrandToken(value) ? value : '';
+  const resolved = token ? resolveToken(value, brand, 'preview') : value;
+  const valid = HEX.test(resolved);
+
   return (
     <div>
       <span className="mb-1 block text-xs font-medium text-slate-600">{label}</span>
@@ -157,15 +188,31 @@ export function ColorField({
           type="color"
           aria-label={label}
           className="h-8 w-9 shrink-0 cursor-pointer rounded border border-slate-300 bg-white p-0.5"
-          value={valid ? (value.length === 4 ? `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}` : value) : '#ffffff'}
+          value={valid ? expandHex(resolved) : '#ffffff'}
           onChange={(e) => onChange(e.target.value.toUpperCase())}
         />
-        <input
-          className={inputCls}
-          value={value}
-          placeholder={allowEmpty ? emptyLabel : '#000000'}
-          onChange={(e) => onChange(e.target.value)}
-        />
+        {token ? (
+          <span className="flex min-w-0 flex-1 items-center gap-1 rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs font-medium text-brand-700">
+            <span className="truncate">Brand · {tokenLabel(token)}</span>
+            <span className="ml-auto font-mono text-[10px] text-brand-500">{resolved || '—'}</span>
+            <button
+              type="button"
+              title="Replace with a fixed colour"
+              aria-label={`Unlink ${label} from the brand`}
+              className="shrink-0 rounded p-0.5 hover:bg-brand-100"
+              onClick={() => onChange(resolved || '#000000')}
+            >
+              <X size={12} />
+            </button>
+          </span>
+        ) : (
+          <input
+            className={inputCls}
+            value={value}
+            placeholder={allowEmpty ? emptyLabel : '#000000'}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        )}
         {allowEmpty && value && (
           <button
             type="button"
@@ -176,6 +223,33 @@ export function ColorField({
           </button>
         )}
       </div>
+      {!noBrand && (
+        <div className="mt-1.5">
+          <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+            Brand colors
+          </span>
+          <div className="flex flex-wrap gap-1">
+            {SWATCHES.map((sw) => {
+              const hex = brand.tokens.colors[sw.key];
+              const active = token === `brand.${sw.key}`;
+              return (
+                <button
+                  key={sw.key}
+                  type="button"
+                  title={`${sw.label} · ${hex}`}
+                  aria-label={`${label}: brand ${sw.label}`}
+                  aria-pressed={active}
+                  onClick={() => onChange(`brand.${sw.key}`)}
+                  className={`h-6 w-6 rounded border transition-transform hover:scale-110 ${
+                    active ? 'border-brand-600 ring-2 ring-brand-500/40' : 'border-slate-300'
+                  }`}
+                  style={{ background: hex || '#ffffff' }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 # Newsletter Builder
+Newsletter Builder helps teams create polished company newsletters without writing code or depending on a designer. Add sections, drag them into place, and edit content directly on a live canvas preview. When the layout is ready, export it as email-ready HTML and send it through your mail tool.
 
 A drag-and-drop email template builder (React + Vite + TypeScript + Tailwind). Everything runs in the
 browser; templates are stored in `localStorage`.
@@ -20,7 +21,8 @@ npm run build      # type-check + production build into dist/
 | Styling | Per-block colors, fonts (email-safe stacks), sizes, alignment, padding, border radius; global body width / colors / font / link color |
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
 | Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html`, size warning for Gmail's ~102 KB clipping |
-| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, autosaved draft, named templates, 3 starter templates |
+| Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, autosaved draft, named templates, 7 starter templates |
+| Brands | Brand kits (colors, fonts, button style, logos, footer, social links), brand switcher in the top bar, brand color swatches on every color field, "Reset to brand", brands page with duplicate / archive / export / import JSON and a live kit preview |
 
 `{{merge_tags}}` typed into text, headings, buttons or links are passed through untouched to the exported HTML.
 
@@ -34,7 +36,10 @@ src/
   lib/design-ops.ts     lookups, row layout changes, JSON validation/normalisation
   lib/defaults.ts       block defaults, layouts, fonts
   lib/starters.ts       starter templates
-  lib/storage.ts        localStorage drafts + templates
+  lib/brand.ts          brand kit, token resolution, access helpers
+  lib/storage.ts        localStorage drafts + templates + brands
+  lib/image.ts          image upload downscaling
+  lib/audit.ts          pre-send image checks for the export dialog
   components/           canvas (dnd-kit), panels, property editors, TipTap rich text, modals
   test/                 renderer, store, drop-targeting and UI tests
 ```
@@ -42,8 +47,30 @@ src/
 The editor canvas renders each block through the same `renderBlock()` used by the export, so what you see
 is what is exported.
 
+## Brands
+
+A color or font field stores **either** a brand token (`"brand.primary"`) **or** a literal override
+(`"#F58220"`). `resolveDesign(design, brand, mode)` replaces every token with a literal value just before
+rendering, so:
+
+- switching brands only changes `design.brandId` — content and manual overrides are untouched;
+- `renderDesign()` never sees a token, so no `brand.*` string can reach an export;
+- the renderer itself contains no brand logic.
+
+Logo **uploads** are downscaled to 400 px and used for the canvas preview only. Exports use the hosted
+`logo_url` / `logo_dark_url` instead, because email clients strip `data:` URIs. The HTML export dialog warns
+about any image that is embedded or not served over https.
+
+See `docs/PROGRESS.md` for the full design, the migration rules and the `TODO`s left in the seeded
+Vee Technologies brand.
+
 ## Known limitations
 
+- **Web fonts** (Kanit and anything else from Google Fonts) are not linked from the exported HTML, so Gmail
+  and Outlook fall back to the web-safe end of the stack (`Kanit, Arial, Helvetica, sans-serif`). The fallback
+  is chosen to look acceptable on its own.
+- **Brands** live in this browser only. Use Export / Import brand JSON to share a kit with the team.
+- **Brand footers and social links** are stored and previewed but are not auto-inserted into an email yet.
 - **Images** uploaded from the device are embedded as base64 data URLs. Gmail and several other clients do
   not display those, and they inflate the HTML. Use hosted image URLs (your own storage/CDN) for real sends.
 - **Social icons** are colored text badges (work everywhere). Paste a hosted PNG URL per network to use real logos.

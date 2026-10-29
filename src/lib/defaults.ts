@@ -9,7 +9,15 @@ import type {
 } from '../types';
 import { uid } from './util';
 
+/**
+ * Kanit is a Google web font. Gmail and Outlook ignore web fonts unless the
+ * email links a stylesheet, which this builder deliberately does not do, so the
+ * stack falls back to web-safe faces that have to look acceptable on their own.
+ */
+export const KANIT_STACK = 'Kanit, Arial, Helvetica, sans-serif';
+
 export const FONT_STACKS: { label: string; value: string }[] = [
+  { label: 'Kanit (falls back to Arial)', value: KANIT_STACK },
   { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
   { label: 'Helvetica', value: 'Helvetica, Arial, sans-serif' },
   { label: 'Verdana', value: 'Verdana, Geneva, sans-serif' },
@@ -229,21 +237,26 @@ export function createRow(layout: number[] = [1]): Row {
   };
 }
 
+/**
+ * New emails default to brand tokens, so they follow the active brand until a
+ * field is overridden by hand. Designs saved before brands existed carry literal
+ * hex values that override these defaults, and are left exactly as they were.
+ */
 export function defaultBody(): BodySettings {
   return {
-    bgColor: '#F3F4F6',
-    contentBgColor: '#FFFFFF',
+    bgColor: 'brand.page_bg',
+    contentBgColor: 'brand.content_bg',
     width: 600,
-    fontFamily: FONT_STACKS[0].value,
-    textColor: '#374151',
-    linkColor: '#2563EB',
+    fontFamily: 'brand.font.body',
+    textColor: 'brand.text',
+    linkColor: 'brand.link',
     preheader: '',
     title: 'Untitled email',
   };
 }
 
 export function emptyDesign(): Design {
-  return { version: 1, body: defaultBody(), rows: [] };
+  return { version: 1, brandId: null, body: defaultBody(), rows: [] };
 }
 
 export function cloneWithNewIds<T>(value: T): T {
