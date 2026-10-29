@@ -48,7 +48,15 @@ export const BLOCK_META: { type: BlockType; label: string }[] = [
   { type: 'social', label: 'Social' },
   { type: 'video', label: 'Video' },
   { type: 'html', label: 'HTML' },
+  { type: 'header', label: 'Header' },
+  { type: 'hero', label: 'Hero' },
+  { type: 'articles', label: 'Article list' },
+  { type: 'footer', label: 'Footer' },
 ];
+
+/** Placeholder art for new composite blocks, so a fresh block looks like something. */
+const STOCK = (seed: string, w: number, h: number) =>
+  `https://picsum.photos/seed/${seed}/${w}/${h}`;
 
 export const SOCIAL_NETWORKS: Record<
   SocialNetwork,
@@ -222,6 +230,163 @@ export function createBlock(type: BlockType): Block {
           padding: pad(0),
         },
       };
+    case 'header':
+      return {
+        id,
+        type,
+        values: {
+          layout: 'logo-left',
+          logoSrc: 'brand.logo',
+          logoAlt: '',
+          logoWidth: 140,
+          fallbackText: 'brand.name',
+          fallbackColor: 'brand.secondary',
+          fallbackFontSize: 22,
+          fallbackFontFamily: 'brand.font.heading',
+          showNav: true,
+          navLinks: [
+            { id: uid('nv'), label: 'Services', href: 'https://example.com/services' },
+            { id: uid('nv'), label: 'Insights', href: 'https://example.com/insights' },
+            { id: uid('nv'), label: 'Contact', href: 'https://example.com/contact' },
+          ],
+          navColor: 'brand.text',
+          navFontSize: 14,
+          navFontFamily: 'brand.font.body',
+          navSeparator: '',
+          hideNavOnMobile: false,
+          bgColor: '',
+          fullWidthBg: false,
+          borderColor: 'brand.border',
+          borderWidth: 1,
+          align: 'left',
+          padding: pad(16, 20),
+        },
+      };
+    case 'hero':
+      return {
+        id,
+        type,
+        values: {
+          layout: 'image-right',
+          eyebrow: 'NEWSLETTER',
+          eyebrowColor: 'brand.primary',
+          heading: 'A headline that earns the open',
+          headingFontSize: 30,
+          headingFontWeight: 'bold',
+          headingFontFamily: 'brand.font.heading',
+          headingColor: 'brand.secondary',
+          subtext:
+            'One or two lines of supporting copy that explain why this email is worth reading.',
+          subtextColor: 'brand.text',
+          subtextFontSize: 15,
+          imageSrc: STOCK('hero', 560, 420),
+          imageAlt: 'Replace this image and describe it here',
+          ctaLabel: 'Read the story',
+          ctaHref: 'https://example.com',
+          ctaStyle: 'filled',
+          ctaColor: 'brand.primary',
+          ctaTextColor: 'brand.content_bg',
+          cards: [
+            {
+              id: uid('hc'),
+              imageSrc: STOCK('card1', 400, 260),
+              imageAlt: 'Describe the first card image',
+              title: 'First card',
+              text: 'A short supporting sentence for this card.',
+              linkLabel: 'Learn more',
+              linkHref: 'https://example.com',
+            },
+            {
+              id: uid('hc'),
+              imageSrc: STOCK('card2', 400, 260),
+              imageAlt: 'Describe the second card image',
+              title: 'Second card',
+              text: 'A short supporting sentence for this card.',
+              linkLabel: 'Learn more',
+              linkHref: 'https://example.com',
+            },
+          ],
+          cardTitleColor: 'brand.secondary',
+          cardTextColor: 'brand.text',
+          cardLinkColor: 'brand.link',
+          bgColor: '',
+          bgImage: '',
+          align: 'left',
+          padding: pad(24, 20),
+        },
+      };
+    case 'articles':
+      return {
+        id,
+        type,
+        values: {
+          layout: 'thumb-left',
+          items: [
+            {
+              id: uid('ai'),
+              imageSrc: STOCK('article1', 320, 240),
+              imageAlt: 'Describe the first article image',
+              title: 'First article title',
+              excerpt: 'A two-line summary that gives the reader a reason to click through.',
+              readMoreLabel: 'Read more',
+              readMoreHref: 'https://example.com/article-1',
+            },
+            {
+              id: uid('ai'),
+              imageSrc: STOCK('article2', 320, 240),
+              imageAlt: 'Describe the second article image',
+              title: 'Second article title',
+              excerpt: 'A two-line summary that gives the reader a reason to click through.',
+              readMoreLabel: 'Read more',
+              readMoreHref: 'https://example.com/article-2',
+            },
+          ],
+          thumbWidth: 180,
+          showDivider: true,
+          dividerColor: 'brand.border',
+          titleFontSize: 18,
+          titleFontWeight: 'bold',
+          titleFontFamily: 'brand.font.heading',
+          titleColor: 'brand.secondary',
+          excerptColor: 'brand.text',
+          excerptFontSize: 14,
+          linkColor: 'brand.link',
+          itemSpacing: 20,
+          bgColor: '',
+          align: 'left',
+          padding: pad(16, 20),
+        },
+      };
+    case 'footer':
+      return {
+        id,
+        type,
+        values: {
+          logoSrc: 'brand.logo',
+          logoAlt: '',
+          logoWidth: 120,
+          address: 'brand.footer.address',
+          legalText: 'brand.footer.legal',
+          unsubscribeText: 'brand.footer.unsubscribe',
+          unsubscribeHref: '{{unsubscribe_url}}',
+          showSocial: true,
+          useBrandSocial: true,
+          socialItems: [],
+          socialSize: 28,
+          socialColorMode: 'mono',
+          socialMonoColor: 'brand.muted',
+          textColor: 'brand.muted',
+          linkColor: 'brand.link',
+          fontSize: 12,
+          fontFamily: 'brand.font.body',
+          bgColor: '',
+          fullWidthBg: false,
+          borderColor: 'brand.border',
+          borderWidth: 1,
+          align: 'center',
+          padding: pad(24, 20),
+        },
+      };
   }
 }
 
@@ -252,6 +417,7 @@ export function defaultBody(): BodySettings {
     linkColor: 'brand.link',
     preheader: '',
     title: 'Untitled email',
+    showFooter: true,
   };
 }
 

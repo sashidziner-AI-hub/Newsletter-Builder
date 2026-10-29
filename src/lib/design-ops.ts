@@ -66,6 +66,8 @@ export function normalizeDesign(input: unknown): Design | null {
 
   const validTypes = new Set<string>(BLOCK_META.map((m) => m.type));
   const body = { ...defaultBody(), ...((raw.body as object) ?? {}) };
+  // designs saved before 1B carry no showFooter; default it to on
+  if (typeof body.showFooter !== 'boolean') body.showFooter = true;
 
   const rows: Row[] = [];
   for (const r of raw.rows as Record<string, unknown>[]) {

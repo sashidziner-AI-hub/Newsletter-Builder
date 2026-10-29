@@ -1,12 +1,17 @@
 import { Copy, Settings2, Trash2, Rows3 } from 'lucide-react';
+import type { Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
 import { findBlock } from '../lib/design-ops';
 import { useEditor } from '../store';
 import {
+  ArticleListEditor,
   BodyEditor,
   ButtonEditor,
   DividerEditor,
+  FooterEditor,
+  HeaderEditor,
   HeadingEditor,
+  HeroEditor,
   HtmlEditor,
   ImageEditor,
   MenuEditor,
@@ -88,6 +93,9 @@ export function RightPanel() {
       const block = loc.block;
       const label = BLOCK_META.find((m) => m.type === block.type)?.label ?? block.type;
       const set = (patch: object) => updateBlock(block.id, patch);
+      // Header/Footer can extend their background across the whole row, which
+      // is the only way to paint outside the content container.
+      const onRowPatch = (patch: Partial<Row>) => updateRow(loc.row.id, patch);
       header = (
         <Header
           icon={<BlockIcon type={block.type} size={17} />}
@@ -124,6 +132,22 @@ export function RightPanel() {
           break;
         case 'html':
           content = <HtmlEditor block={block} set={set} revision={revision} />;
+          break;
+        case 'header':
+          content = (
+            <HeaderEditor block={block} set={set} revision={revision} onRowPatch={onRowPatch} />
+          );
+          break;
+        case 'hero':
+          content = <HeroEditor block={block} set={set} revision={revision} />;
+          break;
+        case 'articles':
+          content = <ArticleListEditor block={block} set={set} revision={revision} />;
+          break;
+        case 'footer':
+          content = (
+            <FooterEditor block={block} set={set} revision={revision} onRowPatch={onRowPatch} />
+          );
           break;
       }
     }

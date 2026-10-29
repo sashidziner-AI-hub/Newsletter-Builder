@@ -102,3 +102,100 @@ undoable, reset-to-brand, export contains no `brand.`, uploaded logo never
 reaches HTML, image audit, seeding, pre-brand template migration, **a template
 whose brand was deleted still renders**, brand JSON round-trip and rejection of
 invalid JSON.
+
+---
+
+## Feature 1B — Header, Hero, Footer, Article list blocks — done (2026-10-29)
+
+Four **composite** blocks, so a newsletter no longer has to be hand-assembled from
+image + menu + heading + button. They follow the existing block pattern exactly; none of
+the 9 original blocks were refactored.
+
+### What shipped
+
+| Block | Layouts | Notes |
+|---|---|---|
+| **Header** | `logo-left`, `logo-center` | Brand logo with a **brand-name text fallback** when the brand has no `logo_url`; nav repeater (max 6) rendered through the **Menu** renderer; optional hide-nav-on-mobile; bottom border |
+| **Hero** | `image-right`, `image-left`, `centered`, `cards-2`, `cards-3` | Eyebrow / heading / subtext / image / CTA; CTA goes through the **Button** renderer so it stays bulletproof; cards stack on mobile |
+| **Article list** | `thumb-left`, `thumb-top`, `text-only` | Repeater up to 10 items with add / remove / move up-down; optional divider between items; `text-only` covers category sections |
+| **Footer** | — | Logo, address, legal text, unsubscribe text and social links all **pull from the active brand** with per-email override; social goes through the **Social** renderer |
+
+### Reuse instead of duplication
+
+Menu, Social and Button are `case` arms inside the module-private `renderBlockInner()`.
+Rather than copy their HTML, a composite block builds a throwaway sub-block and renders it
+through the real thing:
+
+```ts
+renderBlockInner(subBlock('menu', { items: v.navLinks, … }), design, ctx)
+```
+
+`subBlock()` spreads that block type's own defaults, so the `mso-padding-alt` button, the
+`mailto:` coercion in `networkHref()` and the social badge/custom-icon logic all come along
+unchanged. `renderInlineBlock()` is exported for the same purpose outside the module.
+
+### Email safety
+
+- Nested `<table role="presentation">` only. No flex, no grid, and the export contains no
+  `position:` substring at all — the hero background image is written as the `background`
+  shorthand (`background:url(…) center / cover no-repeat;`) rather than
+  `background-position`, so a plain grep stays clean.
+- Mobile stacking **reuses the existing `.eb-col`** media query, so no new stacking CSS was
+  needed. Two classes were added to it: `.eb-hide-mobile` (declared *after* `.eb-col` so
+  hiding wins) and `.eb-center-mobile`. `src/index.css` mirrors both for the canvas preview.
+- Every `<img>` carries `alt`, `width`, `border="0"` and `display:block`. The editor marks
+  alt **required** (red asterisk + warning) because inboxes block images by default.
+- All links are absolute https; merge tags such as `{{unsubscribe_url}}` pass through
+  untouched via the existing `safeUrl()` whitelist.
+
+### The four decisions
+
+1. **Full-bleed background.** A block renders inside `.eb-container` at `body.width`, so its
+   own background can never reach the window edges — only `row.bgColor` can. Header and
+   Footer therefore have an *Extend background full width* switch that writes their colour
+   (token or hex) into the parent row. `resolveDesign()` already walks rows, so a token
+   written there resolves correctly. Two such blocks in one row is last-writer-wins, and the
+   panel says so.
+2. **Hero centered background image** uses `<td background="https://…" bgcolor="#…">`. No
+   VML, so **Outlook on Windows shows the solid colour** — pick one that works alone.
+3. **`BodySettings.showFooter`** (default on, in Email settings). When off, `renderBlock()`
+   returns `''` for footer blocks unless `ctx.editor`, so preview and export drop them while
+   the canvas keeps them at 40 % opacity with a *Hidden on send* badge — still selectable and
+   deletable.
+4. **Hero card count follows the layout**: `cards-2` renders 2, `cards-3` renders 3. Changing
+   layout pads with a default card or trims the tail, which avoids wrapping cards onto a
+   second table row.
+
+### Composite-block plumbing
+
+`renderBlock()` gained two small, additive behaviours, both no-ops for the original blocks:
+the footer skip above, and a `SELF_BG` set so the four composite blocks paint their
+background on the wrapper cell (behind the block padding). Header/Footer borders sit on an
+inner table, so they are inset by the horizontal padding — set padding to 0 and use the row
+if you want an edge-to-edge rule.
+
+### Migration
+
+`normalizeDesign()` rebuilds each block from `createBlock(type)` and shallow-merges stored
+`values`, so the new fields pick up defaults on old JSON automatically. Designs saved before
+1B get `showFooter: true` explicitly.
+
+### Known gaps
+
+- Default blocks ship with `picsum.photos` placeholder images and placeholder alt text; both
+  need replacing before a real send.
+- 1C (presets) will compose these four into ready-made starting points.
+
+### Tests
+
+`src/test/blocks.test.ts` (62) + a `composite blocks (1B)` block in `src/test/app.test.tsx`.
+Suite: **140 passing** (was 74), `tsc --noEmit` clean.
+
+Covered: every block × every layout for no-flex / no-grid / no-position / no-`brand.` /
+table-based, every image having alt + width + `border="0"`, every href https or a merge tag;
+cards and thumb-left using stacking cells; the Outlook background-colour fallback; reuse of
+the bulletproof button; brand switch re-theming all four while hex overrides survive; header
+text fallback with and without a brand logo; footer brand pull-through and per-email
+override; footer social from brand and overridden; `showFooter` off dropping only the footer;
+`showFooter` defaulting to on for pre-1B designs; repeater add / reorder / remove preserving
+item data; the 10-item cap; and a JSON round trip.

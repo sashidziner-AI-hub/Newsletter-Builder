@@ -1,8 +1,16 @@
 import { useRef, useState } from 'react';
-import { ImagePlus, Plus, RotateCcw, Trash2, Wand2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, ImagePlus, Plus, RotateCcw, Trash2, Wand2 } from 'lucide-react';
 import type {
+  ArticleItem,
+  ArticleListValues,
   BodySettings,
   ButtonValues,
+  FooterValues,
+  HeaderValues,
+  HeroCard,
+  HeroValues,
+  NavLink,
+  SocialItem,
   DividerValues,
   HeadingValues,
   HtmlValues,
@@ -16,10 +24,11 @@ import type {
   VideoValues,
   Block,
 } from '../types';
+import { resolveToken } from '../lib/brand';
 import { FONT_STACKS, ROW_LAYOUTS, SOCIAL_NETWORKS } from '../lib/defaults';
 import { readImageFile } from '../lib/image';
 import { uid } from '../lib/util';
-import { useActiveBrand } from '../store';
+import { useActiveBrand, useEditor } from '../store';
 import {
   AlignField,
   ColorField,
@@ -584,6 +593,793 @@ export function RowEditor({
 }
 
 /* --------------------------------------------------------------------- body */
+/* ====================================================== composite blocks */
+
+/** Add / remove / reorder rows of a repeater, bounded by min and max. */
+function Repeater<T extends { id: string }>({
+  items,
+  onChange,
+  make,
+  min = 0,
+  max = 99,
+  addLabel,
+  render,
+}: {
+  items: T[];
+  onChange: (next: T[]) => void;
+  make: () => T;
+  min?: number;
+  max?: number;
+  addLabel: string;
+  render: (item: T, patch: (p: Partial<T>) => void) => React.ReactNode;
+}) {
+  const move = (i: number, delta: number) => {
+    const j = i + delta;
+    if (j < 0 || j >= items.length) return;
+    const next = [...items];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const iconBtn =
+    'rounded p-1 text-slate-400 enabled:hover:bg-white enabled:hover:text-slate-700 disabled:opacity-30';
+
+  return (
+    <div className="space-y-2">
+      {items.map((item, i) => (
+        <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-2">
+          <div className="mb-1.5 flex items-center gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              #{i + 1}
+            </span>
+            <div className="ml-auto flex items-center gap-0.5">
+              <button
+                type="button"
+                title="Move up"
+                aria-label={`Move item ${i + 1} up`}
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                className={iconBtn}
+              >
+                <ChevronUp size={14} />
+              </button>
+              <button
+                type="button"
+                title="Move down"
+                aria-label={`Move item ${i + 1} down`}
+                disabled={i === items.length - 1}
+                onClick={() => move(i, 1)}
+                className={iconBtn}
+              >
+                <ChevronDown size={14} />
+              </button>
+              <button
+                type="button"
+                title={items.length <= min ? `At least ${min} required` : 'Remove'}
+                aria-label={`Remove item ${i + 1}`}
+                disabled={items.length <= min}
+                onClick={() => onChange(items.filter((_, j) => j !== i))}
+                className="rounded p-1 text-slate-400 enabled:hover:bg-red-50 enabled:hover:text-red-600 disabled:opacity-30"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {render(item, (p) => onChange(items.map((x, j) => (j === i ? { ...x, ...p } : x))))}
+          </div>
+        </div>
+      ))}
+      {items.length < max && (
+        <button
+          type="button"
+          onClick={() => onChange([...items, make()])}
+          className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-slate-300 py-1.5 text-xs font-medium text-slate-600 hover:border-brand-500 hover:text-brand-700"
+        >
+          <Plus size={14} /> {addLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Image URL + alt pair. Alt is required: email clients block images by default. */
+function ImageFields({
+  label = 'Image',
+  src,
+  alt,
+  onSrc,
+  onAlt,
+}: {
+  label?: string;
+  src: string;
+  alt: string;
+  onSrc: (v: string) => void;
+  onAlt: (v: string) => void;
+}) {
+  const missing = !alt.trim();
+  return (
+    <>
+      <TextField
+        label={`${label} URL`}
+        value={src}
+        placeholder="https://…"
+        onChange={onSrc}
+        hint={src && !/^https:\/\//i.test(src) ? 'Use an absolute https URL so it loads in every inbox.' : undefined}
+      />
+      <div>
+        <span className="mb-1 block text-xs font-medium text-slate-600">
+          Alt text <span className="text-red-600">*</span>
+        </span>
+        <input
+          aria-label={`${label} alt text`}
+          value={alt}
+          placeholder="Describe the image"
+          onChange={(e) => onAlt(e.target.value)}
+          className={`w-full rounded-md border bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+            missing
+              ? 'border-red-300 focus:border-red-500 focus:ring-red-500/20'
+              : 'border-slate-300 focus:border-brand-500 focus:ring-brand-500/20'
+          }`}
+        />
+        {missing && (
+          <span className="mt-1 block text-[11px] leading-snug text-red-600">
+            Required — most inboxes block images by default, so this is what the reader sees.
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * A text field that either follows a brand token or holds a per-email override.
+ * Mirrors how ColorField treats brand colours.
+ */
+function BrandTextField({
+  label,
+  value,
+  token,
+  onChange,
+  multiline,
+}: {
+  label: string;
+  value: string;
+  token: string;
+  onChange: (v: string) => void;
+  multiline?: boolean;
+}) {
+  const brand = useActiveBrand();
+  const fromBrand = value === token;
+  const resolved = resolveToken(token, brand, 'preview');
+  const cls =
+    'w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20';
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600">{label}</span>
+        <button
+          type="button"
+          onClick={() => onChange(fromBrand ? resolved : token)}
+          className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+        >
+          {fromBrand ? 'Override' : 'Use brand'}
+        </button>
+      </div>
+      {fromBrand ? (
+        <div className="rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs text-brand-700">
+          <span className="font-semibold">From brand</span>{' '}
+          <span className="text-brand-600">
+            {resolved || '(empty — fill it in the brand kit)'}
+          </span>
+        </div>
+      ) : multiline ? (
+        <textarea className={cls} rows={2} value={value} onChange={(e) => onChange(e.target.value)} />
+      ) : (
+        <input className={cls} value={value} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </div>
+  );
+}
+
+/** Background colour + the row write-through that makes it edge-to-edge. */
+function FullWidthBg({
+  bgColor,
+  fullWidthBg,
+  setBg,
+  setFullWidth,
+}: {
+  bgColor: string;
+  fullWidthBg: boolean;
+  setBg: (v: string) => void;
+  setFullWidth: (v: boolean) => void;
+}) {
+  return (
+    <>
+      <ColorField label="Background color" value={bgColor} allowEmpty emptyLabel="transparent" onChange={setBg} />
+      <ToggleField label="Extend background full width" value={fullWidthBg} onChange={setFullWidth} />
+      <p className="text-[11px] leading-snug text-slate-400">
+        A block stops at the content width. This also paints the row behind it, which is the only
+        way to reach the window edges — so it affects anything else sharing this row.
+      </p>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ header */
+export function HeaderEditor({
+  block,
+  set,
+  onRowPatch,
+}: EditorProps<'header', HeaderValues> & { onRowPatch?: (patch: Partial<Row>) => void }) {
+  const v = block.values;
+  const brand = useActiveBrand();
+  const usesBrandLogo = v.logoSrc === 'brand.logo';
+  const resolvedLogo = resolveToken(v.logoSrc, brand, 'preview');
+
+  const setBg = (bgColor: string) => {
+    set({ bgColor });
+    if (v.fullWidthBg) onRowPatch?.({ bgColor });
+  };
+
+  return (
+    <>
+      <Section title="Logo">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-slate-600">Source</span>
+          <button
+            type="button"
+            onClick={() => set({ logoSrc: usesBrandLogo ? resolvedLogo : 'brand.logo' })}
+            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+          >
+            {usesBrandLogo ? 'Use a custom logo' : 'Use brand logo'}
+          </button>
+        </div>
+        {usesBrandLogo ? (
+          <div className="rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs text-brand-700">
+            <span className="font-semibold">From brand</span>{' '}
+            <span className="text-brand-600">
+              {resolvedLogo || `no logo set — showing "${brand.name}" as text`}
+            </span>
+          </div>
+        ) : (
+          <ImageFields
+            label="Logo"
+            src={v.logoSrc}
+            alt={v.logoAlt}
+            onSrc={(logoSrc) => set({ logoSrc })}
+            onAlt={(logoAlt) => set({ logoAlt })}
+          />
+        )}
+        <NumberField label="Logo width" unit="px" min={40} max={400} value={v.logoWidth} onChange={(logoWidth) => set({ logoWidth })} />
+        {!resolvedLogo && (
+          <>
+            <p className="text-[11px] leading-snug text-slate-400">
+              Text fallback, shown while the brand has no logo URL.
+            </p>
+            <NumberField label="Fallback text size" unit="px" min={12} max={40} value={v.fallbackFontSize} onChange={(fallbackFontSize) => set({ fallbackFontSize })} />
+            <ColorField label="Fallback text color" value={v.fallbackColor} onChange={(fallbackColor) => set({ fallbackColor })} />
+            <SelectField label="Fallback font" value={v.fallbackFontFamily} onChange={(fallbackFontFamily) => set({ fallbackFontFamily })} options={fontOptions(true)} />
+          </>
+        )}
+      </Section>
+
+      <Section title="Navigation">
+        <ToggleField label="Show navigation" value={v.showNav} onChange={(showNav) => set({ showNav })} />
+        {v.showNav && (
+          <>
+            <Repeater<NavLink>
+              items={v.navLinks}
+              onChange={(navLinks) => set({ navLinks })}
+              make={() => ({ id: uid('nv'), label: 'New link', href: 'https://example.com' })}
+              max={6}
+              addLabel="Add link"
+              render={(item, patch) => (
+                <>
+                  <input
+                    aria-label="Link label"
+                    className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm focus:border-brand-500 focus:outline-none"
+                    value={item.label}
+                    onChange={(e) => patch({ label: e.target.value })}
+                  />
+                  <input
+                    aria-label="Link URL"
+                    className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                    value={item.href}
+                    placeholder="https://…"
+                    onChange={(e) => patch({ href: e.target.value })}
+                  />
+                </>
+              )}
+            />
+            <NumberField label="Link size" unit="px" min={10} max={22} value={v.navFontSize} onChange={(navFontSize) => set({ navFontSize })} />
+            <ColorField label="Link color" value={v.navColor} onChange={(navColor) => set({ navColor })} />
+            <SelectField label="Link font" value={v.navFontFamily} onChange={(navFontFamily) => set({ navFontFamily })} options={fontOptions(true)} />
+            <TextField label="Separator" value={v.navSeparator} placeholder="e.g. |" onChange={(navSeparator) => set({ navSeparator })} />
+            <ToggleField label="Hide navigation on mobile" value={v.hideNavOnMobile} onChange={(hideNavOnMobile) => set({ hideNavOnMobile })} />
+          </>
+        )}
+      </Section>
+
+      <Section title="Style">
+        <Segmented
+          label="Layout"
+          value={v.layout}
+          onChange={(layout) => set({ layout })}
+          options={[
+            { value: 'logo-left' as const, label: 'Logo left' },
+            { value: 'logo-center' as const, label: 'Centered' },
+          ]}
+        />
+        <FullWidthBg
+          bgColor={v.bgColor}
+          fullWidthBg={v.fullWidthBg}
+          setBg={setBg}
+          setFullWidth={(fullWidthBg) => {
+            set({ fullWidthBg });
+            onRowPatch?.({ bgColor: fullWidthBg ? v.bgColor : '' });
+          }}
+        />
+        <NumberField label="Bottom border" unit="px" min={0} max={8} value={v.borderWidth} onChange={(borderWidth) => set({ borderWidth })} />
+        {v.borderWidth > 0 && (
+          <ColorField label="Border color" value={v.borderColor} onChange={(borderColor) => set({ borderColor })} />
+        )}
+      </Section>
+      <Section title="Spacing">
+        <PaddingField value={v.padding} onChange={(padding) => set({ padding })} />
+      </Section>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------- hero */
+export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
+  const v = block.values;
+  const isCards = v.layout === 'cards-2' || v.layout === 'cards-3';
+  const cardCount = v.layout === 'cards-3' ? 3 : 2;
+
+  const makeCard = (): HeroCard => ({
+    id: uid('hc'),
+    imageSrc: '',
+    imageAlt: '',
+    title: 'New card',
+    text: 'A short supporting sentence.',
+    linkLabel: 'Learn more',
+    linkHref: 'https://example.com',
+  });
+
+  /** The layout decides the column count, so the card list follows it. */
+  const setLayout = (layout: HeroValues['layout']) => {
+    if (layout !== 'cards-2' && layout !== 'cards-3') return set({ layout });
+    const want = layout === 'cards-3' ? 3 : 2;
+    const cards = [...v.cards];
+    while (cards.length < want) cards.push(makeCard());
+    set({ layout, cards: cards.slice(0, want) });
+  };
+
+  return (
+    <>
+      <Section title="Layout">
+        <SelectField
+          label="Arrangement"
+          value={v.layout}
+          onChange={setLayout}
+          options={[
+            { value: 'image-right' as const, label: 'Text left, image right' },
+            { value: 'image-left' as const, label: 'Image left, text right' },
+            { value: 'centered' as const, label: 'Centered' },
+            { value: 'cards-2' as const, label: '2 cards' },
+            { value: 'cards-3' as const, label: '3 cards' },
+          ]}
+        />
+      </Section>
+
+      <Section title="Content">
+        <TextField label="Eyebrow" value={v.eyebrow} placeholder="Small label above the heading" onChange={(eyebrow) => set({ eyebrow })} />
+        <TextField label="Heading" multiline rows={2} value={v.heading} onChange={(heading) => set({ heading })} />
+        <TextField label="Subtext" multiline rows={3} value={v.subtext} onChange={(subtext) => set({ subtext })} />
+      </Section>
+
+      {!isCards && (
+        <Section title="Image">
+          <ImageFields
+            src={v.imageSrc}
+            alt={v.imageAlt}
+            onSrc={(imageSrc) => set({ imageSrc })}
+            onAlt={(imageAlt) => set({ imageAlt })}
+          />
+        </Section>
+      )}
+
+      {isCards && (
+        <Section title={`Cards (${cardCount})`}>
+          <Repeater<HeroCard>
+            items={v.cards.slice(0, cardCount)}
+            onChange={(cards) => set({ cards })}
+            make={makeCard}
+            min={cardCount}
+            max={cardCount}
+            addLabel="Add card"
+            render={(item, patch) => (
+              <>
+                <input
+                  aria-label="Card title"
+                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm focus:border-brand-500 focus:outline-none"
+                  value={item.title}
+                  onChange={(e) => patch({ title: e.target.value })}
+                />
+                <textarea
+                  aria-label="Card text"
+                  rows={2}
+                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                  value={item.text}
+                  onChange={(e) => patch({ text: e.target.value })}
+                />
+                <ImageFields
+                  label="Card image"
+                  src={item.imageSrc}
+                  alt={item.imageAlt}
+                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onAlt={(imageAlt) => patch({ imageAlt })}
+                />
+                <input
+                  aria-label="Card link label"
+                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                  value={item.linkLabel}
+                  placeholder="Link label (optional)"
+                  onChange={(e) => patch({ linkLabel: e.target.value })}
+                />
+                <input
+                  aria-label="Card link URL"
+                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                  value={item.linkHref}
+                  placeholder="https://…"
+                  onChange={(e) => patch({ linkHref: e.target.value })}
+                />
+              </>
+            )}
+          />
+          <p className="text-[11px] leading-snug text-slate-400">
+            The arrangement sets the card count ({cardCount}). Cards stack on mobile.
+          </p>
+          <ColorField label="Card title color" value={v.cardTitleColor} onChange={(cardTitleColor) => set({ cardTitleColor })} />
+          <ColorField label="Card text color" value={v.cardTextColor} onChange={(cardTextColor) => set({ cardTextColor })} />
+          <ColorField label="Card link color" value={v.cardLinkColor} onChange={(cardLinkColor) => set({ cardLinkColor })} />
+        </Section>
+      )}
+
+      {!isCards && (
+        <Section title="Call to action">
+          <TextField label="Button label" value={v.ctaLabel} placeholder="Leave empty to hide" onChange={(ctaLabel) => set({ ctaLabel })} />
+          <TextField label="Button URL" value={v.ctaHref} placeholder="https://…" onChange={(ctaHref) => set({ ctaHref })} />
+          <Segmented
+            label="Style"
+            value={v.ctaStyle}
+            onChange={(ctaStyle) => set({ ctaStyle })}
+            options={[
+              { value: 'filled' as const, label: 'Filled' },
+              { value: 'outline' as const, label: 'Outline' },
+            ]}
+          />
+          <ColorField label="Button color" value={v.ctaColor} onChange={(ctaColor) => set({ ctaColor })} />
+          {v.ctaStyle === 'filled' && (
+            <ColorField label="Button text color" value={v.ctaTextColor} onChange={(ctaTextColor) => set({ ctaTextColor })} />
+          )}
+        </Section>
+      )}
+
+      <Section title="Typography">
+        <NumberField label="Heading size" unit="px" min={16} max={56} value={v.headingFontSize} onChange={(headingFontSize) => set({ headingFontSize })} />
+        <Segmented label="Heading weight" value={v.headingFontWeight} onChange={(headingFontWeight) => set({ headingFontWeight })} options={boldOptions} />
+        <SelectField label="Heading font" value={v.headingFontFamily} onChange={(headingFontFamily) => set({ headingFontFamily })} options={fontOptions(true)} />
+        <ColorField label="Heading color" value={v.headingColor} onChange={(headingColor) => set({ headingColor })} />
+        <ColorField label="Eyebrow color" value={v.eyebrowColor} onChange={(eyebrowColor) => set({ eyebrowColor })} />
+        <NumberField label="Subtext size" unit="px" min={11} max={24} value={v.subtextFontSize} onChange={(subtextFontSize) => set({ subtextFontSize })} />
+        <ColorField label="Subtext color" value={v.subtextColor} onChange={(subtextColor) => set({ subtextColor })} />
+        <AlignField value={v.align} onChange={(align) => set({ align })} />
+      </Section>
+
+      <Section title="Background">
+        <ColorField label="Background color" value={v.bgColor} allowEmpty emptyLabel="transparent" onChange={(bgColor) => set({ bgColor })} />
+        {v.layout === 'centered' && (
+          <TextField
+            label="Background image URL"
+            value={v.bgImage}
+            placeholder="https://…"
+            onChange={(bgImage) => set({ bgImage })}
+            hint="Outlook on Windows ignores background images and shows the background color instead, so pick a color that works on its own."
+          />
+        )}
+      </Section>
+      <Section title="Spacing">
+        <PaddingField value={v.padding} onChange={(padding) => set({ padding })} />
+      </Section>
+    </>
+  );
+}
+
+/* ----------------------------------------------------------- article list */
+export function ArticleListEditor({ block, set }: EditorProps<'articles', ArticleListValues>) {
+  const v = block.values;
+  const textOnly = v.layout === 'text-only';
+
+  return (
+    <>
+      <Section title="Layout">
+        <Segmented
+          label="Arrangement"
+          value={v.layout}
+          onChange={(layout) => set({ layout })}
+          options={[
+            { value: 'thumb-left' as const, label: 'Thumb left' },
+            { value: 'thumb-top' as const, label: 'Thumb top' },
+            { value: 'text-only' as const, label: 'Text only' },
+          ]}
+        />
+        {v.layout === 'thumb-left' && (
+          <NumberField label="Thumbnail width" unit="px" min={80} max={280} value={v.thumbWidth} onChange={(thumbWidth) => set({ thumbWidth })} />
+        )}
+      </Section>
+
+      <Section title={`Items (${v.items.length} of 10)`}>
+        <Repeater<ArticleItem>
+          items={v.items}
+          onChange={(items) => set({ items })}
+          make={() => ({
+            id: uid('ai'),
+            imageSrc: '',
+            imageAlt: '',
+            title: 'New article',
+            excerpt: 'A short summary.',
+            readMoreLabel: 'Read more',
+            readMoreHref: 'https://example.com',
+          })}
+          min={1}
+          max={10}
+          addLabel="Add item"
+          render={(item, patch) => (
+            <>
+              <input
+                aria-label="Article title"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm focus:border-brand-500 focus:outline-none"
+                value={item.title}
+                onChange={(e) => patch({ title: e.target.value })}
+              />
+              <textarea
+                aria-label="Article excerpt"
+                rows={2}
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                value={item.excerpt}
+                onChange={(e) => patch({ excerpt: e.target.value })}
+              />
+              {!textOnly && (
+                <ImageFields
+                  label="Thumbnail"
+                  src={item.imageSrc}
+                  alt={item.imageAlt}
+                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onAlt={(imageAlt) => patch({ imageAlt })}
+                />
+              )}
+              <input
+                aria-label="Read more label"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                value={item.readMoreLabel}
+                placeholder="Read more label (optional)"
+                onChange={(e) => patch({ readMoreLabel: e.target.value })}
+              />
+              <input
+                aria-label="Read more URL"
+                className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                value={item.readMoreHref}
+                placeholder="https://…"
+                onChange={(e) => patch({ readMoreHref: e.target.value })}
+              />
+            </>
+          )}
+        />
+      </Section>
+
+      <Section title="Style">
+        <ToggleField label="Divider between items" value={v.showDivider} onChange={(showDivider) => set({ showDivider })} />
+        {v.showDivider && (
+          <ColorField label="Divider color" value={v.dividerColor} onChange={(dividerColor) => set({ dividerColor })} />
+        )}
+        <NumberField label="Item spacing" unit="px" min={0} max={60} value={v.itemSpacing} onChange={(itemSpacing) => set({ itemSpacing })} />
+        <NumberField label="Title size" unit="px" min={12} max={32} value={v.titleFontSize} onChange={(titleFontSize) => set({ titleFontSize })} />
+        <Segmented label="Title weight" value={v.titleFontWeight} onChange={(titleFontWeight) => set({ titleFontWeight })} options={boldOptions} />
+        <SelectField label="Title font" value={v.titleFontFamily} onChange={(titleFontFamily) => set({ titleFontFamily })} options={fontOptions(true)} />
+        <ColorField label="Title color" value={v.titleColor} onChange={(titleColor) => set({ titleColor })} />
+        <NumberField label="Excerpt size" unit="px" min={11} max={22} value={v.excerptFontSize} onChange={(excerptFontSize) => set({ excerptFontSize })} />
+        <ColorField label="Excerpt color" value={v.excerptColor} onChange={(excerptColor) => set({ excerptColor })} />
+        <ColorField label="Link color" value={v.linkColor} onChange={(linkColor) => set({ linkColor })} />
+        <ColorField label="Background color" value={v.bgColor} allowEmpty emptyLabel="transparent" onChange={(bgColor) => set({ bgColor })} />
+        <AlignField value={v.align} onChange={(align) => set({ align })} />
+      </Section>
+      <Section title="Spacing">
+        <PaddingField value={v.padding} onChange={(padding) => set({ padding })} />
+      </Section>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ footer */
+export function FooterEditor({
+  block,
+  set,
+  onRowPatch,
+}: EditorProps<'footer', FooterValues> & { onRowPatch?: (patch: Partial<Row>) => void }) {
+  const v = block.values;
+  const brand = useActiveBrand();
+  const showFooter = useEditor((s) => s.design.body.showFooter);
+  const usesBrandLogo = v.logoSrc === 'brand.logo';
+  const resolvedLogo = resolveToken(v.logoSrc, brand, 'preview');
+
+  const setBg = (bgColor: string) => {
+    set({ bgColor });
+    if (v.fullWidthBg) onRowPatch?.({ bgColor });
+  };
+
+  return (
+    <>
+      {!showFooter && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] leading-snug text-amber-900">
+          <span className="font-semibold">Hidden on send.</span> “Show footer” is off in Email
+          settings, so this block is left out of the preview and the export.
+        </div>
+      )}
+
+      <Section title="Logo">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-slate-600">Source</span>
+          <button
+            type="button"
+            onClick={() => set({ logoSrc: usesBrandLogo ? resolvedLogo : 'brand.logo' })}
+            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+          >
+            {usesBrandLogo ? 'Use a custom logo' : 'Use brand logo'}
+          </button>
+        </div>
+        {usesBrandLogo ? (
+          <div className="rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs text-brand-700">
+            <span className="font-semibold">From brand</span>{' '}
+            <span className="text-brand-600">{resolvedLogo || '(no logo set — nothing is shown)'}</span>
+          </div>
+        ) : (
+          <ImageFields
+            label="Logo"
+            src={v.logoSrc}
+            alt={v.logoAlt}
+            onSrc={(logoSrc) => set({ logoSrc })}
+            onAlt={(logoAlt) => set({ logoAlt })}
+          />
+        )}
+        <NumberField label="Logo width" unit="px" min={40} max={320} value={v.logoWidth} onChange={(logoWidth) => set({ logoWidth })} />
+      </Section>
+
+      <Section title="Text">
+        <BrandTextField
+          label="Address"
+          value={v.address}
+          token="brand.footer.address"
+          multiline
+          onChange={(address) => set({ address })}
+        />
+        <BrandTextField
+          label="Legal text"
+          value={v.legalText}
+          token="brand.footer.legal"
+          multiline
+          onChange={(legalText) => set({ legalText })}
+        />
+        <BrandTextField
+          label="Unsubscribe text"
+          value={v.unsubscribeText}
+          token="brand.footer.unsubscribe"
+          onChange={(unsubscribeText) => set({ unsubscribeText })}
+        />
+        <TextField
+          label="Unsubscribe URL"
+          value={v.unsubscribeHref}
+          onChange={(unsubscribeHref) => set({ unsubscribeHref })}
+          hint="Merge tags like {{unsubscribe_url}} are passed through to the export untouched — your ESP fills them in."
+        />
+      </Section>
+
+      <Section title="Social">
+        <ToggleField label="Show social icons" value={v.showSocial} onChange={(showSocial) => set({ showSocial })} />
+        {v.showSocial && (
+          <>
+            <ToggleField
+              label="Use the brand's social links"
+              value={v.useBrandSocial}
+              onChange={(useBrandSocial) => set({ useBrandSocial })}
+            />
+            {v.useBrandSocial ? (
+              <div className="rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs text-brand-700">
+                <span className="font-semibold">From brand</span>{' '}
+                <span className="text-brand-600">
+                  {brand.social_links.length
+                    ? brand.social_links.map((l) => SOCIAL_NETWORKS[l.network].label).join(', ')
+                    : '(none yet — add them in the brand kit)'}
+                </span>
+              </div>
+            ) : (
+              <Repeater<SocialItem>
+                items={v.socialItems}
+                onChange={(socialItems) => set({ socialItems })}
+                make={() => ({ id: uid('si'), network: 'linkedin', href: 'https://linkedin.com', iconUrl: '' })}
+                max={8}
+                addLabel="Add network"
+                render={(item, patch) => (
+                  <>
+                    <select
+                      aria-label="Network"
+                      className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-sm focus:border-brand-500 focus:outline-none"
+                      value={item.network}
+                      onChange={(e) => patch({ network: e.target.value as SocialNetwork })}
+                    >
+                      {(Object.keys(SOCIAL_NETWORKS) as SocialNetwork[]).map((n) => (
+                        <option key={n} value={n}>
+                          {SOCIAL_NETWORKS[n].label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      aria-label="Profile URL"
+                      className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                      value={item.href}
+                      placeholder="https://…"
+                      onChange={(e) => patch({ href: e.target.value })}
+                    />
+                  </>
+                )}
+              />
+            )}
+            <NumberField label="Icon size" unit="px" min={18} max={48} value={v.socialSize} onChange={(socialSize) => set({ socialSize })} />
+            <Segmented
+              label="Icon colors"
+              value={v.socialColorMode}
+              onChange={(socialColorMode) => set({ socialColorMode })}
+              options={[
+                { value: 'brand' as const, label: 'Network' },
+                { value: 'mono' as const, label: 'Single color' },
+              ]}
+            />
+            {v.socialColorMode === 'mono' && (
+              <ColorField label="Icon color" value={v.socialMonoColor} onChange={(socialMonoColor) => set({ socialMonoColor })} />
+            )}
+          </>
+        )}
+      </Section>
+
+      <Section title="Style">
+        <NumberField label="Text size" unit="px" min={9} max={18} value={v.fontSize} onChange={(fontSize) => set({ fontSize })} />
+        <ColorField label="Text color" value={v.textColor} onChange={(textColor) => set({ textColor })} />
+        <ColorField label="Link color" value={v.linkColor} onChange={(linkColor) => set({ linkColor })} />
+        <SelectField label="Font" value={v.fontFamily} onChange={(fontFamily) => set({ fontFamily })} options={fontOptions(true)} />
+        <FullWidthBg
+          bgColor={v.bgColor}
+          fullWidthBg={v.fullWidthBg}
+          setBg={setBg}
+          setFullWidth={(fullWidthBg) => {
+            set({ fullWidthBg });
+            onRowPatch?.({ bgColor: fullWidthBg ? v.bgColor : '' });
+          }}
+        />
+        <NumberField label="Top border" unit="px" min={0} max={8} value={v.borderWidth} onChange={(borderWidth) => set({ borderWidth })} />
+        {v.borderWidth > 0 && (
+          <ColorField label="Border color" value={v.borderColor} onChange={(borderColor) => set({ borderColor })} />
+        )}
+        <AlignField value={v.align} onChange={(align) => set({ align })} />
+      </Section>
+      <Section title="Spacing">
+        <PaddingField value={v.padding} onChange={(padding) => set({ padding })} />
+      </Section>
+    </>
+  );
+}
+
 export function BodyEditor({
   body,
   onChange,
@@ -630,6 +1426,17 @@ export function BodyEditor({
           emptyLabel="transparent"
           onChange={(contentBgColor) => onChange({ contentBgColor })}
         />
+      </Section>
+      <Section title="Footer">
+        <ToggleField
+          label="Show footer"
+          value={body.showFooter}
+          onChange={(showFooter) => onChange({ showFooter })}
+        />
+        <p className="text-[11px] leading-snug text-slate-400">
+          When off, every Footer block is left out of the preview and the export. The blocks stay
+          in the email, dimmed on the canvas, so you can switch them back on.
+        </p>
       </Section>
       <Section title="Typography">
         <SelectField label="Default font" value={body.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} options={fontOptions(false)} />

@@ -107,6 +107,16 @@ function tokenValue(path: string, brand: Brand, mode: ResolveMode): string | und
     case 'website':
     case 'website_url':
       return brand.website_url;
+    case 'name':
+      return brand.name;
+    case 'footer.address':
+      return brand.footer.address;
+    case 'footer.legal':
+    case 'footer.legal_text':
+      return brand.footer.legal_text;
+    case 'footer.unsubscribe':
+    case 'footer.unsubscribe_text':
+      return brand.footer.unsubscribe_text;
     default:
       return undefined;
   }
@@ -156,6 +166,24 @@ export function resolveDesign(design: Design, brand: Brand, mode: ResolveMode = 
     };
     walk(draft.body);
     walk(draft.rows);
+
+    // Social links are an array, so they cannot ride along as a string token.
+    // A footer set to follow the brand gets its icon list filled here, which
+    // keeps every piece of brand awareness on this side of the boundary and
+    // out of the renderer.
+    for (const row of draft.rows) {
+      for (const col of row.columns) {
+        for (const block of col.blocks) {
+          if (block.type !== 'footer' || !block.values.useBrandSocial) continue;
+          block.values.socialItems = brand.social_links.map((l) => ({
+            id: l.id,
+            network: l.network,
+            href: l.url,
+            iconUrl: '',
+          }));
+        }
+      }
+    }
   });
 }
 

@@ -53,6 +53,9 @@ const BlockView = memo(function BlockView({
 
   const label = BLOCK_META.find((m) => m.type === block.type)?.label ?? block.type;
   const showLineBefore = hint?.type === 'block' && hint.columnId === column.id && hint.index === index;
+  // "Show footer" off: keep it visible but obviously excluded, so it is still
+  // selectable and deletable. Preview and export leave it out entirely.
+  const hiddenOnSend = block.type === 'footer' && !body.showFooter;
 
   return (
     <div
@@ -73,7 +76,15 @@ const BlockView = memo(function BlockView({
       } ${drag.isDragging ? 'opacity-30' : ''}`}
     >
       {showLineBefore && <DropLine className="-top-[2px]" />}
-      <div className="eb-canvas-content pointer-events-none" dangerouslySetInnerHTML={{ __html: html }} />
+      <div
+        className={`eb-canvas-content pointer-events-none ${hiddenOnSend ? 'opacity-40' : ''}`}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {hiddenOnSend && (
+        <span className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow">
+          Hidden on send
+        </span>
+      )}
       {selected && (
         <div className="absolute -top-7 right-0 z-20 flex items-center gap-0.5 rounded-md bg-brand-600 p-0.5 text-white shadow-md">
           <span className="flex items-center gap-1 px-1.5 text-[11px] font-medium">

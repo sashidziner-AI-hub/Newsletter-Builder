@@ -17,6 +17,7 @@ npm run build      # type-check + production build into dist/
 |---|---|
 | Layout | Rows with 1-4 columns and ratio layouts (1:2, 2:1, 1:2:1), row background + content background, padding, stack-on-mobile toggle |
 | Blocks | Heading (H1-H6), Text (rich text), Image (URL or upload), Button, Divider, Menu, Social, Video thumbnail, custom HTML |
+| Composite blocks | Header (logo left / centered, nav), Hero (image left/right, centered, 2 or 3 cards), Article list (thumb left / thumb top / text only, up to 10 items), Footer (brand logo, address, legal, unsubscribe, social) |
 | Editing | Drag & drop from the left panel, drag to reorder blocks (across columns) and rows, duplicate, delete, undo/redo (Ctrl+Z / Ctrl+Shift+Z), Delete key, Ctrl+D |
 | Styling | Per-block colors, fonts (email-safe stacks), sizes, alignment, padding, border radius; global body width / colors / font / link color |
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
@@ -47,6 +48,25 @@ src/
 The editor canvas renders each block through the same `renderBlock()` used by the export, so what you see
 is what is exported.
 
+## Composite blocks
+
+Header, Hero, Article list and Footer are built from the same block pattern as everything else, and
+they **reuse the existing renderers** rather than duplicating their HTML: a composite block builds a
+throwaway sub-block and renders it through the real Menu, Social or Button case, so the bulletproof
+button and the social badge logic come along unchanged.
+
+Two things worth knowing:
+
+- **A block cannot paint edge-to-edge.** Every row is wrapped in a container at the content width, so
+  a block's background stops there. Header and Footer have an *Extend background full width* switch
+  that writes their colour to the parent row, which is the only element that spans the window.
+- **Hero's centered background image uses `<td background="…">`**, so Outlook on Windows shows the
+  background *colour* instead. Pick one that works on its own.
+
+The *Show footer* switch in Email settings (default on) leaves every Footer block out of the preview
+and the export. The canvas still shows them dimmed with a "Hidden on send" badge so they stay
+selectable.
+
 ## Brands
 
 A color or font field stores **either** a brand token (`"brand.primary"`) **or** a literal override
@@ -70,7 +90,12 @@ Vee Technologies brand.
   and Outlook fall back to the web-safe end of the stack (`Kanit, Arial, Helvetica, sans-serif`). The fallback
   is chosen to look acceptable on its own.
 - **Brands** live in this browser only. Use Export / Import brand JSON to share a kit with the team.
-- **Brand footers and social links** are stored and previewed but are not auto-inserted into an email yet.
+- **Brand footers and social links** feed the Footer block, which pulls them from the active brand
+  with a per-email override. Nothing auto-inserts a Footer block into a new email yet.
+- **Outlook on Windows ignores background images**, so the Hero's centered background image falls
+  back to its background colour there. No VML is emitted.
+- New composite blocks ship with `picsum.photos` placeholder images and placeholder alt text —
+  replace both before a real send.
 - **Images** uploaded from the device are embedded as base64 data URLs. Gmail and several other clients do
   not display those, and they inflate the HTML. Use hosted image URLs (your own storage/CDN) for real sends.
 - **Social icons** are colored text badges (work everywhere). Paste a hosted PNG URL per network to use real logos.

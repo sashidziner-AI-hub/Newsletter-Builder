@@ -48,11 +48,39 @@ describe('App', () => {
 
   it('adds every block type via click', () => {
     render(<App />);
-    for (const label of ['Heading', 'Text', 'Image', 'Button', 'Divider', 'Menu', 'Social', 'Video', 'HTML']) {
+    for (const label of [
+      'Heading',
+      'Text',
+      'Image',
+      'Button',
+      'Divider',
+      'Menu',
+      'Social',
+      'Video',
+      'HTML',
+      'Header',
+      'Hero',
+      'Article list',
+      'Footer',
+    ]) {
       fireEvent.click(screen.getByTitle(`Add ${label}`));
     }
     const types = s().design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks.map((b) => b.type)));
-    expect(types).toEqual(['heading', 'text', 'image', 'button', 'divider', 'menu', 'social', 'video', 'html']);
+    expect(types).toEqual([
+      'heading',
+      'text',
+      'image',
+      'button',
+      'divider',
+      'menu',
+      'social',
+      'video',
+      'html',
+      'header',
+      'hero',
+      'articles',
+      'footer',
+    ]);
   });
 
   it('Delete key asks first, then removes the selected block', () => {
@@ -254,6 +282,76 @@ describe('App', () => {
       const dialog = screen.getByRole('dialog');
       expect(within(dialog).getByText('Vee Technologies')).toBeTruthy();
       expect(within(dialog).getByText('New brand')).toBeTruthy();
+    });
+  });
+
+  describe('composite blocks (1B)', () => {
+    const blockValues = <T,>(type: string): T => {
+      const b = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((x) => x.type === type);
+      return b!.values as T;
+    };
+
+    it('the article list repeater adds, reorders and removes items', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Article list'));
+
+      type Items = { items: { id: string; title: string }[] };
+      expect(blockValues<Items>('articles').items).toHaveLength(2);
+      const originalSecond = blockValues<Items>('articles').items[1].title;
+
+      // add
+      fireEvent.click(screen.getByText('Add item'));
+      expect(blockValues<Items>('articles').items).toHaveLength(3);
+
+      // reorder: move #2 up, its data must come along
+      fireEvent.click(screen.getByLabelText('Move item 2 up'));
+      expect(blockValues<Items>('articles').items[0].title).toBe(originalSecond);
+
+      // remove
+      fireEvent.click(screen.getByLabelText('Remove item 3'));
+      expect(blockValues<Items>('articles').items).toHaveLength(2);
+      expect(blockValues<Items>('articles').items[0].title).toBe(originalSecond);
+    });
+
+    it('the hero card count follows the chosen layout', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+
+      type Cards = { cards: unknown[]; layout: string };
+      fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'cards-3' } });
+      expect(blockValues<Cards>('hero').cards).toHaveLength(3);
+
+      fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'cards-2' } });
+      expect(blockValues<Cards>('hero').cards).toHaveLength(2);
+    });
+
+    it('Show footer off dims the footer on the canvas and leaves it out of the export', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Footer'));
+
+      // the toggle lives in Email settings
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByText('Email settings')).toBeTruthy();
+      expect(s().design.body.showFooter).toBe(true);
+
+      fireEvent.click(screen.getByRole('switch', { name: 'Show footer' }));
+      expect(s().design.body.showFooter).toBe(false);
+      expect(screen.getByText('Hidden on send')).toBeTruthy();
+
+      // ...and the export drops it
+      fireEvent.click(screen.getByTitle('Export HTML'));
+      const html = (screen.getByRole('dialog').querySelector('textarea') as HTMLTextAreaElement).value;
+      expect(html).not.toContain('{{unsubscribe_url}}');
+    });
+
+    it('marks a missing image alt as required', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+      const alt = screen.getByLabelText('Image alt text');
+      fireEvent.change(alt, { target: { value: '' } });
+      expect(screen.getByText(/Required/)).toBeTruthy();
     });
   });
 

@@ -46,6 +46,19 @@ body {
   width: 100%;
 }
 
+/* ...including the classes the composite blocks use inside a single column */
+.eb-mobile .eb-canvas-content .eb-col {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.eb-mobile .eb-canvas-content .eb-center-mobile {
+  text-align: center !important;
+}
+.eb-mobile .eb-canvas-content .eb-hide-mobile {
+  display: none !important;
+}
+
 /* ---------- rich text editor (TipTap) ---------- */
 .rte .tiptap {
   min-height: 130px;

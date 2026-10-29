@@ -16,7 +16,11 @@ export type BlockType =
   | 'menu'
   | 'social'
   | 'video'
-  | 'html';
+  | 'html'
+  | 'header'
+  | 'hero'
+  | 'footer'
+  | 'articles';
 
 export interface HeadingValues {
   text: string;
@@ -145,6 +149,141 @@ export interface HtmlValues {
   padding: Padding;
 }
 
+/* ------------------------------------------------- composite blocks (1B) */
+
+export interface NavLink {
+  id: string;
+  label: string;
+  href: string;
+}
+
+export interface HeaderValues {
+  layout: 'logo-left' | 'logo-center';
+  /** 'brand.logo' by default; a literal https URL overrides it */
+  logoSrc: string;
+  logoAlt: string;
+  logoWidth: number;
+  /** shown when the logo resolves to nothing — 'brand.name' by default */
+  fallbackText: string;
+  fallbackColor: string;
+  fallbackFontSize: number;
+  fallbackFontFamily: string;
+  showNav: boolean;
+  navLinks: NavLink[];
+  navColor: string;
+  navFontSize: number;
+  navFontFamily: string;
+  navSeparator: string;
+  hideNavOnMobile: boolean;
+  bgColor: string;
+  /** also writes bgColor to the parent row, the only way to go edge-to-edge */
+  fullWidthBg: boolean;
+  borderColor: string;
+  borderWidth: number;
+  align: Align;
+  padding: Padding;
+}
+
+export interface HeroCard {
+  id: string;
+  imageSrc: string;
+  imageAlt: string;
+  title: string;
+  text: string;
+  linkLabel: string;
+  linkHref: string;
+}
+
+export interface HeroValues {
+  layout: 'image-right' | 'image-left' | 'centered' | 'cards-2' | 'cards-3';
+  eyebrow: string;
+  eyebrowColor: string;
+  heading: string;
+  headingFontSize: number;
+  headingFontWeight: 'normal' | 'bold';
+  headingFontFamily: string;
+  headingColor: string;
+  subtext: string;
+  subtextColor: string;
+  subtextFontSize: number;
+  imageSrc: string;
+  imageAlt: string;
+  ctaLabel: string;
+  ctaHref: string;
+  ctaStyle: 'filled' | 'outline';
+  ctaColor: string;
+  ctaTextColor: string;
+  cards: HeroCard[];
+  cardTitleColor: string;
+  cardTextColor: string;
+  cardLinkColor: string;
+  bgColor: string;
+  /** centered layout only; Outlook falls back to bgColor */
+  bgImage: string;
+  align: Align;
+  padding: Padding;
+}
+
+export interface FooterValues {
+  /** 'brand.logo' by default; '' hides it */
+  logoSrc: string;
+  logoAlt: string;
+  logoWidth: number;
+  /** these default to brand.footer.* tokens; a literal string overrides */
+  address: string;
+  legalText: string;
+  unsubscribeText: string;
+  /** merge tag by default, passed through to the export untouched */
+  unsubscribeHref: string;
+  showSocial: boolean;
+  /** when true, resolveDesign() fills socialItems from the active brand */
+  useBrandSocial: boolean;
+  socialItems: SocialItem[];
+  socialSize: number;
+  socialColorMode: 'brand' | 'mono';
+  socialMonoColor: string;
+  textColor: string;
+  linkColor: string;
+  fontSize: number;
+  fontFamily: string;
+  bgColor: string;
+  fullWidthBg: boolean;
+  borderColor: string;
+  borderWidth: number;
+  align: Align;
+  padding: Padding;
+}
+
+export interface ArticleItem {
+  id: string;
+  imageSrc: string;
+  imageAlt: string;
+  title: string;
+  excerpt: string;
+  readMoreLabel: string;
+  readMoreHref: string;
+}
+
+export interface ArticleListValues {
+  layout: 'thumb-left' | 'thumb-top' | 'text-only';
+  items: ArticleItem[];
+  /** px width of the thumbnail column in thumb-left */
+  thumbWidth: number;
+  showDivider: boolean;
+  dividerColor: string;
+  titleFontSize: number;
+  titleFontWeight: 'normal' | 'bold';
+  titleFontFamily: string;
+  titleColor: string;
+  excerptColor: string;
+  excerptFontSize: number;
+  linkColor: string;
+  itemSpacing: number;
+  bgColor: string;
+  align: Align;
+  padding: Padding;
+}
+
 export type Block =
   | { id: string; type: 'heading'; values: HeadingValues }
   | { id: string; type: 'text'; values: TextValues }
@@ -154,7 +293,11 @@ export type Block =
   | { id: string; type: 'menu'; values: MenuValues }
   | { id: string; type: 'social'; values: SocialValues }
   | { id: string; type: 'video'; values: VideoValues }
-  | { id: string; type: 'html'; values: HtmlValues };
+  | { id: string; type: 'html'; values: HtmlValues }
+  | { id: string; type: 'header'; values: HeaderValues }
+  | { id: string; type: 'hero'; values: HeroValues }
+  | { id: string; type: 'footer'; values: FooterValues }
+  | { id: string; type: 'articles'; values: ArticleListValues };
 
 export interface Column {
   id: string;
@@ -180,6 +323,8 @@ export interface BodySettings {
   linkColor: string;
   preheader: string;
   title: string;
+  /** when false, footer blocks are skipped in preview and export */
+  showFooter: boolean;
 }
 
 export interface Design {
