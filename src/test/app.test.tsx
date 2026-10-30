@@ -11,6 +11,11 @@ vi.mock('../components/RichTextEditor', () => ({
 import App from '../App';
 import { useEditor } from '../store';
 import { listTemplates } from '../lib/storage';
+import {
+  type LibraryImage,
+  UPLOAD_UNAVAILABLE,
+  makeLibraryImage,
+} from '../lib/image-storage';
 import { emptyBrand, veeBrand } from '../lib/brand';
 
 const s = () => useEditor.getState();
@@ -525,6 +530,128 @@ describe('App', () => {
       expect(canvas()).not.toContain('{{first_name}}');
       // the export still carries the tag
       expect(exportText()).toContain('Hi {{first_name}}');
+    });
+  });
+
+  describe('image library (2C-1)', () => {
+    const seed = (over: Partial<LibraryImage> = {}) =>
+      makeLibraryImage('https://cdn.example.com/spring-hero.jpg', {
+        name: 'Spring hero',
+        defaultAlt: 'Sun over a bay',
+        width: 1200,
+        height: 800,
+        status: 'ok',
+        ...over,
+      });
+
+    beforeEach(() => {
+      act(() => useEditor.setState({ images: [seed()] }));
+    });
+
+    it('the picker fills both the URL and the alt text', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+
+      fireEvent.click(screen.getByText('Choose from library'));
+      const dialog = screen.getByRole('dialog', { name: 'Choose an image' });
+      fireEvent.click(within(dialog).getByLabelText('Use Spring hero'));
+
+      const block = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'image')!;
+      expect((block.values as { src: string }).src).toBe('https://cdn.example.com/spring-hero.jpg');
+      expect((block.values as { alt: string }).alt).toBe('Sun over a bay');
+    });
+
+    it('fills a composite block field through the same picker', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+
+      // the hero image field, not the background one
+      fireEvent.click(screen.getAllByText('Choose from library')[0]);
+      const dialog = screen.getByRole('dialog', { name: 'Choose an image' });
+      fireEvent.click(within(dialog).getByLabelText('Use Spring hero'));
+
+      const hero = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'hero')!;
+      expect((hero.values as { imageSrc: string }).imageSrc).toBe(
+        'https://cdn.example.com/spring-hero.jpg',
+      );
+      expect((hero.values as { imageAlt: string }).imageAlt).toBe('Sun over a bay');
+    });
+
+    it('rejects a non-https URL in the field with a reason', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'http://cdn.example.com/a.png' },
+      });
+      expect(screen.getByText(/Only https URLs work in email/)).toBeTruthy();
+    });
+
+    it('refuses a device upload instead of embedding a data: URI', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      // several file inputs exist (library/blocks import); this is the block's
+      const input = document.querySelector('input[type=file][accept="image/*"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.change(input);
+
+      expect(screen.getByText(UPLOAD_UNAVAILABLE)).toBeTruthy();
+      const block = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'image')!;
+      // nothing was written, least of all a data: URI
+      expect((block.values as { src: string }).src).toBe('');
+    });
+
+    it('shows the library as a left-panel tab', () => {
+      render(<App />);
+      fireEvent.click(screen.getByText('Images'));
+      expect(screen.getByLabelText('Search images')).toBeTruthy();
+      expect(screen.getByText('Spring hero')).toBeTruthy();
+    });
+
+    it('offers to save a pasted URL that is not in the library yet', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'https://cdn.example.com/brand-new.png' },
+      });
+      expect(screen.getByText('Save to library')).toBeTruthy();
+
+      // a URL already known shows its library name instead
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'https://cdn.example.com/spring-hero.jpg' },
+      });
+      expect(screen.queryByText('Save to library')).toBeNull();
+      expect(screen.getByText(/From the library: Spring hero/)).toBeTruthy();
+    });
+
+    it('lists image problems in the export dialog and jumps to the block', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      const selection = s().selection;
+      const blockId = selection.kind === 'block' ? selection.id : '';
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'http://cdn.example.com/insecure.png' },
+      });
+      // deselect, so the jump has somewhere to land
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(s().selection.kind).toBe('body');
+
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = screen.getByRole('dialog', { name: 'Export' });
+      expect(within(dialog).getByText(/Not served over https/)).toBeTruthy();
+      expect(within(dialog).getByText(/Missing alt text/)).toBeTruthy();
+
+      fireEvent.click(within(dialog).getAllByText('Image →')[0]);
+      // the dialog closed and the offending block is selected
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(s().selection).toEqual({ kind: 'block', id: blockId });
     });
   });
 

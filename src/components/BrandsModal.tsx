@@ -16,6 +16,7 @@ import { downloadFile, slugify, uid } from '../lib/util';
 import { useAccessibleBrands, useEditor } from '../store';
 import {
   ColorField,
+  ImageUrlField,
   NumberField,
   Section,
   Segmented,
@@ -106,10 +107,9 @@ function LogoField({
         />
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
-      <TextField
+      <ImageUrlField
         label="Hosted logo URL (used in exports)"
         value={url}
-        placeholder="https://…"
         onChange={onUrl}
         hint="Uploads are a canvas preview only — email clients strip embedded images. Exports always use this https URL."
       />

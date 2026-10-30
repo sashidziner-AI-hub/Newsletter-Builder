@@ -18,8 +18,9 @@ import { useEditor } from '../store';
 import { useConfirm } from './ConfirmDialog';
 import { BlockIcon } from './icons';
 import { SavedBlockThumb } from './SavedBlockThumb';
+import { ImageLibrary } from './ImageLibrary';
 
-type Tab = 'content' | 'rows' | 'saved';
+type Tab = 'content' | 'rows' | 'saved' | 'images';
 
 function Tile({
   id,
@@ -373,6 +374,7 @@ export function LeftPanel({ notify }: { notify: (m: string) => void }) {
     { id: 'content', label: 'Content' },
     { id: 'rows', label: 'Rows' },
     { id: 'saved', label: `Saved${savedCount ? ` (${savedCount})` : ''}` },
+    { id: 'images', label: 'Images' },
   ];
 
   return (
@@ -383,7 +385,7 @@ export function LeftPanel({ notify }: { notify: (m: string) => void }) {
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`border-b-2 px-2 py-2 text-xs font-medium ${
+            className={`border-b-2 px-1.5 py-2 text-xs font-medium ${
               tab === t.id
                 ? 'border-brand-600 text-brand-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -454,6 +456,8 @@ export function LeftPanel({ notify }: { notify: (m: string) => void }) {
       )}
 
       {tab === 'saved' && <SavedBlocksTab notify={notify} />}
+
+      {tab === 'images' && <ImageLibrary notify={notify} />}
     </aside>
   );
 }

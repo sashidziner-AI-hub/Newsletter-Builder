@@ -26,6 +26,7 @@ npm run build      # type-check + production build into dist/
 | Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, named templates |
 | Saving | Auto-save every 2 s with visible status, reload recovery, 20-deep version history with read-only preview and restore |
 | Saved blocks | Save any block or row to a searchable library with categories and brand-aware thumbnails, drag or click to reuse, export / import as JSON |
+| Images | A library of vetted https image URLs with names, default alt text, tags and brand scoping; a picker on every image field; export checks for non-https, missing alt, broken and placeholder images, each jumping to its block |
 | Presets | **New** opens a dialog of Blank + 8 starter presets (Newsletter, Promotional, Product launch, Welcome, Cold outreach, Event invitation, Order confirmation, Weekly digest), each with a live thumbnail rendered in the active brand |
 | Brands | Brand kits (colors, fonts, button style, logos, footer, social links), brand switcher in the top bar, brand color swatches on every color field, "Reset to brand", brands page with duplicate / archive / export / import JSON and a live kit preview |
 
@@ -47,6 +48,8 @@ src/
   lib/plaintext.ts      design -> plain-text version
   lib/blocks-library.ts saved blocks: validation, import planning, instantiation
   lib/versions.ts       snapshot rules, pruning (pure, no storage)
+  lib/image-storage.ts  image library: adapter interface, validation, probing
+  lib/image-audit.ts    design-level image checks (block-aware, unlike lib/audit.ts)
   lib/brand.ts          brand kit, token resolution, access helpers
   lib/storage.ts        localStorage drafts + templates + brands
   lib/image.ts          image upload downscaling
@@ -57,6 +60,28 @@ src/
 
 The editor canvas renders each block through the same `renderBlock()` used by the export, so what you see
 is what is exported.
+
+## Images
+
+The **Images** tab holds public https URLs the team has vetted, each with a name, default alt
+text, tags and an optional brand. Every image field in the app — the Image block, the Hero
+image, background and cards, Article thumbnails, Header and Footer logos, social icons, video
+thumbnails and the brand logo URLs — has a **Choose from library** button that fills the URL
+*and* its alt text. A URL you paste by hand can be saved to the library in one click.
+
+**URL only, for now.** Hosting is not set up, so `upload()` is an unimplemented method on the
+storage adapter: choosing a file says *"Upload needs image hosting. Paste a public https image
+URL instead."* It never falls back to an embedded `data:` image, because most inboxes strip
+those. `http:`, `data:` and `blob:` URLs are rejected with a reason.
+
+The export dialog carries an **Images** check list: how many images the email has, and any
+that are not https, missing alt text, still preset placeholders, embedded, or failing to load
+— each with a button that jumps straight to the block. Load failures are only reported after
+you press *Check images load*, so the list never claims to know something it has not checked.
+Export is never blocked.
+
+Images below twice their rendered width get a **Low resolution** note, and anything over
+1600px wide gets a **Very large image** note. Both are advisory.
 
 ## Saving, history and saved blocks
 
@@ -174,7 +199,7 @@ Vee Technologies brand.
   and Outlook fall back to the web-safe end of the stack (`Kanit, Arial, Helvetica, sans-serif`). The fallback
   is chosen to look acceptable on its own.
 - **Brands** live in this browser only. Use Export / Import brand JSON to share a kit with the team.
-- **Everything is per-browser**, including saved blocks and version history. Nothing syncs
+- **Everything is per-browser**, including the image library, saved blocks and version history. Nothing syncs
   between machines or teammates; JSON export is the sharing mechanism.
 - **Deleting an email deletes its version history** with it. There is no trash.
 - **Merge tags are stored as `{{tag}}` only.** The six built-ins map to real ESP field names;

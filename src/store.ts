@@ -5,6 +5,7 @@ import type { Block, BlockType, Brand, Design, Device, Row, Selection, BodySetti
 import type { SavedBlock } from './lib/blocks-library';
 import { instantiate, makeSavedBlock } from './lib/blocks-library';
 import { shouldSnapshot, type SnapshotReason } from './lib/versions';
+import { imageStorage, type LibraryImage } from './lib/image-storage';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
@@ -52,6 +53,12 @@ interface EditorState {
   dirty: boolean;
   saveState: SaveState;
   savedBlocks: SavedBlock[];
+  /** the image library, shared across every email in this browser */
+  images: LibraryImage[];
+  setImages: (images: LibraryImage[]) => void;
+  addImage: (image: LibraryImage) => void;
+  updateImage: (id: string, patch: Partial<LibraryImage>) => void;
+  removeImage: (id: string) => void;
   /** when the last automatic version snapshot was taken, for the 5-minute throttle */
 
   openEmail: (record: SavedTemplate) => void;
@@ -141,6 +148,13 @@ export const useEditor = create<EditorState>((set, get) => {
     }
   }
 
+  /** one place to surface a failed write, so none of them fail silently */
+  const reportFull = (
+    setState: typeof set,
+    getState: typeof get,
+    message: string,
+  ) => setState({ saveState: { status: 'error', at: getState().saveState.at, message } });
+
   /** brands live outside undo history; they are shared across all emails */
   const writeBrands = (next: Brand[]) => {
     set({ brands: next });
@@ -154,6 +168,7 @@ export const useEditor = create<EditorState>((set, get) => {
     dirty: false,
     saveState: { status: 'idle', at: 0, message: '' },
     savedBlocks: listSavedBlocks(),
+    images: imageStorage.list(),
     past: [],
     future: [],
     selection: { kind: 'body' },
@@ -309,6 +324,27 @@ export const useEditor = create<EditorState>((set, get) => {
           },
         });
       }
+    },
+
+    setImages: (images) => {
+      set({ images });
+      if (imageStorage.replaceAll(images) === 'full') reportFull(set, get, 'Images not saved: storage full');
+    },
+
+    addImage: (image) => {
+      const next = [image, ...get().images.filter((i) => i.id !== image.id)];
+      set({ images: next });
+      if (imageStorage.add(image) === 'full') reportFull(set, get, 'Image not saved: storage full');
+    },
+
+    updateImage: (id, patch) => {
+      set({ images: get().images.map((i) => (i.id === id ? { ...i, ...patch, id } : i)) });
+      if (imageStorage.update(id, patch) === 'full') reportFull(set, get, 'Image not saved: storage full');
+    },
+
+    removeImage: (id) => {
+      set({ images: get().images.filter((i) => i.id !== id) });
+      imageStorage.remove(id);
     },
 
     setSavedBlocks: (blocks) => {

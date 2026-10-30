@@ -27,12 +27,13 @@ import type {
 import { resolveToken } from '../lib/brand';
 import { MERGE_TAGS } from '../lib/merge';
 import { FONT_STACKS, ROW_LAYOUTS, SOCIAL_NETWORKS } from '../lib/defaults';
-import { readImageFile } from '../lib/image';
+import { UPLOAD_UNAVAILABLE } from '../lib/image-storage';
 import { slugify, uid } from '../lib/util';
 import { useActiveBrand, useEditor } from '../store';
 import {
   AlignField,
   ColorField,
+  ImageUrlField,
   LinkField,
   NumberField,
   PaddingField,
@@ -118,7 +119,6 @@ export function TextEditor({ block, set, revision }: EditorProps<'text', TextVal
 }
 
 /* -------------------------------------------------------------------- image */
-const MAX_UPLOAD_WIDTH = 1200;
 
 export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
   const v = block.values;
@@ -126,15 +126,14 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
   const [error, setError] = useState('');
   const isData = v.src.startsWith('data:');
 
-  const onFile = async (file?: File) => {
+  /**
+   * Uploading would have to embed a data: URI, which Gmail and most inboxes
+   * strip. Until there is somewhere to host files, this says so rather than
+   * putting an image in the email that will not render.
+   */
+  const onFile = (file?: File) => {
     if (!file) return;
-    setError('');
-    if (!file.type.startsWith('image/')) return setError('Please choose an image file.');
-    try {
-      set({ src: await readImageFile(file, MAX_UPLOAD_WIDTH) });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
-    }
+    setError(UPLOAD_UNAVAILABLE);
   };
 
   return (
@@ -163,20 +162,21 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
             accept="image/*"
             className="hidden"
             onChange={(e) => {
-              void onFile(e.target.files?.[0]);
+              onFile(e.target.files?.[0]);
               e.target.value = '';
             }}
           />
         </div>
         {error && <p className="text-xs text-red-600">{error}</p>}
-        <TextField
+        <ImageUrlField
           label="Image URL"
           value={isData ? '' : v.src}
-          placeholder={isData ? '(uploaded image embedded in the template)' : 'https://…'}
           onChange={(src) => set({ src })}
+          onPickAlt={(alt) => set({ alt })}
+          displayWidth={Math.round((600 * v.width) / 100)}
           hint={
             isData
-              ? 'Embedded images do not display in Gmail and many other inboxes. Upload the file to your own storage/CDN and paste its URL here before sending.'
+              ? 'This block still holds an embedded image, which Gmail and many inboxes strip. Paste a hosted https URL to replace it.'
               : undefined
           }
         />
@@ -415,12 +415,11 @@ export function SocialEditor({ block, set }: EditorProps<'social', SocialValues>
                   placeholder={it.network === 'email' ? 'name@example.com' : 'https://…'}
                   onChange={(e) => updateItem(it.id, { href: e.target.value })}
                 />
-                <input
-                  aria-label="Custom icon URL"
-                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:border-brand-500 focus:outline-none"
+                <ImageUrlField
+                  label="Custom icon URL"
                   value={it.iconUrl}
-                  placeholder="Custom icon PNG URL (optional)"
-                  onChange={(e) => updateItem(it.id, { iconUrl: e.target.value })}
+                  onChange={(iconUrl) => updateItem(it.id, { iconUrl })}
+                  displayWidth={v.size}
                 />
               </div>
               <button
@@ -494,12 +493,13 @@ export function VideoEditor({ block, set }: EditorProps<'video', VideoValues>) {
           placeholder="https://www.youtube.com/watch?v=…"
           hint="Email clients cannot play video, so the email shows a thumbnail that links to the video. YouTube thumbnails are picked up automatically."
         />
-        <TextField
+        <ImageUrlField
           label="Thumbnail URL (optional)"
           value={v.thumbnail}
           onChange={(thumbnail) => set({ thumbnail })}
-          placeholder="https://…/thumbnail.jpg"
-          hint="Required for Vimeo and other platforms."
+          onPickAlt={(alt) => set({ alt })}
+          displayWidth={Math.round((600 * v.width) / 100)}
+          hint="YouTube thumbnails are picked up automatically. Other platforms need one here."
         />
         <TextField label="Alt text" value={v.alt} onChange={(alt) => set({ alt })} />
       </Section>
@@ -718,22 +718,25 @@ function ImageFields({
   alt,
   onSrc,
   onAlt,
+  displayWidth,
 }: {
   label?: string;
   src: string;
   alt: string;
   onSrc: (v: string) => void;
   onAlt: (v: string) => void;
+  /** rendered width in px, for the resolution note */
+  displayWidth?: number;
 }) {
   const missing = !alt.trim();
   return (
     <>
-      <TextField
+      <ImageUrlField
         label={`${label} URL`}
         value={src}
-        placeholder="https://…"
         onChange={onSrc}
-        hint={src && !/^https:\/\//i.test(src) ? 'Use an absolute https URL so it loads in every inbox.' : undefined}
+        onPickAlt={onAlt}
+        displayWidth={displayWidth}
       />
       <div>
         <span className="mb-1 block text-xs font-medium text-slate-600">
@@ -1135,11 +1138,11 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
       <Section title="Background">
         <ColorField label="Background color" value={v.bgColor} allowEmpty emptyLabel="transparent" onChange={(bgColor) => set({ bgColor })} />
         {v.layout === 'centered' && (
-          <TextField
+          <ImageUrlField
             label="Background image URL"
             value={v.bgImage}
-            placeholder="https://…"
             onChange={(bgImage) => set({ bgImage })}
+            displayWidth={600}
             hint="Outlook on Windows ignores background images and shows the background color instead, so pick a color that works on its own."
           />
         )}

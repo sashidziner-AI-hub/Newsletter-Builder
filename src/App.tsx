@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Block, Row } from './types';
+import type { LibraryImage } from './lib/image-storage';
 import { useEditor } from './store';
 
 import { DndShell } from './components/dnd';
@@ -10,6 +11,8 @@ import { TopBar } from './components/TopBar';
 import { ExportHtmlModal, PreviewModal, TemplatesModal } from './components/Modals';
 import { HistoryModal } from './components/HistoryModal';
 import { SaveBlockDialog } from './components/SaveBlockDialog';
+import { ImagePickerModal } from './components/ImageLibrary';
+import { registerImagePicker } from './components/fields';
 import { BrandsModal } from './components/BrandsModal';
 import { NewEmailModal } from './components/NewEmailModal';
 import { ConfirmProvider, DELETE_BLOCK, DELETE_ROW, useConfirm } from './components/ConfirmDialog';
@@ -36,6 +39,14 @@ function Editor() {
   const confirm = useConfirm();
   const [modal, setModal] = useState<ModalName>(null);
   const [saveBlock, setSaveBlock] = useState<SaveBlockTarget>(null);
+  const [picker, setPicker] = useState<((image: LibraryImage) => void) | null>(null);
+
+  // every image field opens the picker through this one hole, so fields.tsx
+  // never has to import the library (which itself uses those fields)
+  useEffect(() => {
+    registerImagePicker(({ onPick }) => setPicker(() => onPick));
+    return () => registerImagePicker(null);
+  }, []);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<number>(0);
 
@@ -139,6 +150,16 @@ function Editor() {
       {modal === 'brands' && <BrandsModal onClose={() => setModal(null)} notify={notify} />}
       {modal === 'new' && <NewEmailModal onClose={() => setModal(null)} notify={notify} />}
       {modal === 'history' && <HistoryModal onClose={() => setModal(null)} notify={notify} />}
+      {picker && (
+        <ImagePickerModal
+          notify={notify}
+          onClose={() => setPicker(null)}
+          onPick={(image) => {
+            picker(image);
+            setPicker(null);
+          }}
+        />
+      )}
       {saveBlock && (
         <SaveBlockDialog
           kind={saveBlock.kind}

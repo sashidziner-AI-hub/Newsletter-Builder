@@ -518,3 +518,117 @@ acceptance flows end to end), plus auto-save, drafts-grouping and rename/copy ca
 The quota path is tested by stubbing `Storage.prototype.setItem` to throw
 `QuotaExceededError` a set number of times, proving prune-then-retry succeeds, that an
 unrecoverable failure reports `'full'`, and that the failure reaches the save status.
+
+---
+
+## Feature 2C-1 — URL-based image library — done (2026-10-30)
+
+Images were the weakest part of the builder: every URL typed by hand into whichever block
+needed it, the same hero pasted into four emails with four different alt texts, and nothing
+telling you an image was broken, low-resolution or still preset stock art until it reached an
+inbox. 2C-1 adds a library of vetted URLs, a picker on every image field, and an export check
+list that names each problem and jumps to the block.
+
+Hosting is undecided, so this is **URL-only**. No file upload.
+
+### Twelve fields, not seven
+
+The brief listed seven image fields; there are twelve. `SocialItem.iconUrl` and
+`VideoValues.thumbnail` were missing from it, and both now get the picker and the checks —
+a field that escapes the audit is precisely the gap the audit exists to close.
+
+| | |
+|---|---|
+| Image block | `src` |
+| Hero | `imageSrc`, `bgImage`, `cards[].imageSrc` |
+| Article list | `items[].imageSrc` |
+| Header / Footer | `logoSrc` |
+| Social | `items[].iconUrl` |
+| Video | `thumbnail` |
+| Brand | `logo_url`, `logo_dark_url` |
+
+`Brand.logo` / `logo_dark` stay as 1A left them: canvas-preview-only uploads that never export.
+
+### The storage adapter
+
+`ImageStorage` is an interface — `list` / `add` / `update` / `remove` / `replaceAll`, plus an
+optional `upload(file)`. `LocalImageStorage` implements it over 2B's `writeSafe()`, so the
+library inherits the quota prune-and-retry and the honest "storage full" message for free.
+Every record carries `schemaVersion: 2`; anything without one reads as version 1 and is kept.
+
+`upload()` exists and **deliberately throws**:
+
+> Upload needs image hosting. Paste a public https image URL instead.
+
+It must never fall back to a `data:` URI — an "upload" that silently embedded one would put an
+image in the email that most inboxes refuse to render, which is worse than no upload at all.
+
+### The conflict in the brief, and how it was resolved
+
+The acceptance criterion said *no `data:` URI can enter an email*, but the Image block's
+**Upload from device** wrote one straight into `values.src` and that **does** export — while
+the rules said not to refactor existing blocks. Both could not hold.
+
+The button now routes through `storage.upload()` and surfaces the refusal. That is an editor
+change rather than a block or renderer change, and it closes the hole. Emails that already
+contain a `data:` URI keep it, and the export warns, exactly as before.
+
+### Design-level audit, not HTML
+
+1A's `auditImageSources(html)` regexes `<img src>` out of the rendered output. That cannot
+say which block an image came from — so "jump to block" is impossible from it — and it misses
+the hero background entirely, because that renders as `<td background="…">`, not an `<img>`.
+
+`src/lib/image-audit.ts` walks the **design** instead: `collectImages()` returns every use
+with its block id, a human label ("Hero card 2 image", "Article 3 thumbnail") and the width it
+renders at; `auditDesignImages()` classifies each as `not-https` / `missing-alt` /
+`placeholder` / `embedded` / `broken`. It runs over the **resolved** design, so a
+`brand.logo` token is checked as the URL that actually ships — and since `resolveDesign`
+preserves block ids, the jump still lands. `auditImageSources` is untouched and still used by
+the 1A/1C tests.
+
+Alt text is only demanded where the field has one. Backgrounds, social icons and logos carry
+no alt of their own, so they are never reported for it. Merge tags are skipped entirely.
+
+### Checks that do not lie
+
+Structural problems are computed the instant the export dialog opens. Load failures are not:
+a **Check images load** button probes the URLs and caches the result, and an image that has
+not been probed is **never** reported as broken. The dialog opens fast, works offline, and
+only claims what it has actually checked. The library re-checks its own items when it opens
+and shows a *Could not load* badge.
+
+Export is never blocked — warnings only.
+
+### Resolution notes
+
+Non-blocking, shown beside the field when the image is in the library: **Low resolution** when
+the natural width is under twice the rendered width (what a retina screen wants) and **Very
+large image** above 1600px.
+
+### Known gaps
+
+- Resolution notes need the image to be in the library, since that is where its measured size
+  lives. A hand-pasted URL gets them once it is saved.
+- The library re-check probes every item on open. Fine for tens of images; a library of
+  hundreds would want batching.
+- `probeImage` is injectable precisely because jsdom never loads images — the browser loader
+  is only exercised in the real-browser pass, not in the unit tests.
+
+### Tests
+
+`src/test/image-library.test.ts` (30), `src/test/image-audit.test.ts` (22), plus an
+`image library (2C-1)` block in `src/test/app.test.tsx` (7). Suite: **489 passing** (was 430),
+`tsc --noEmit` clean.
+
+Covered: https accepted; `http:`, `data:`, `blob:`, empty and malformed rejected with a
+reason; multi-line paste with in-paste de-duplication; duplicate URLs skipped on import; name
+clashes reported separately; a stored `data:` record dropped on read; `upload()` always
+throwing; all twelve fields collected; hero cards limited to the rendered layout; text-only
+articles contributing none; the brand-token logo audited as its real URL; broken only when
+probed; both resolution thresholds; the picker filling URL **and** alt; library edits not
+mutating emails that already use the image; the upload refusal writing nothing.
+
+Verified in a real browser: three seeded images listed with thumbnails, the brand filter
+narrowing to shared, the picker filling a Hero's URL and alt, the export list grouping two
+placeholders with working jump-to-block, and a pasted `data:` URI refused with a reason.

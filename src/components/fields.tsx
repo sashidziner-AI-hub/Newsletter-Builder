@@ -1,9 +1,17 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Braces, ChevronDown, Link2, Link2Off, X } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Braces, ChevronDown, Image as ImageIcon, Link2, Link2Off, Plus, X } from 'lucide-react';
 import type { Align, BrandColors, Padding } from '../types';
 import { isBrandToken, resolveToken, tokenLabel } from '../lib/brand';
 import { isMergeTagOnly, MERGE_TAGS } from '../lib/merge';
-import { useActiveBrand } from '../store';
+import { resolutionNote } from '../lib/image-audit';
+import {
+  type LibraryImage,
+  findByUrl,
+  makeLibraryImage,
+  probeImage,
+  validateImageUrl,
+} from '../lib/image-storage';
+import { useActiveBrand, useEditor } from '../store';
 
 const inputCls =
   'w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20';
@@ -288,6 +296,142 @@ export function LinkField({
         <span className="mt-1 block text-[11px] leading-snug text-slate-400">
           A merge tag — your ESP fills this in, and link tracking never touches it.
         </span>
+      )}
+    </div>
+  );
+}
+
+/* ================================================= image URL field (2C-1) */
+
+/**
+ * Opened by every image field. Declared here as a hole the app fills on mount,
+ * so `fields.tsx` does not have to import the library modal and create a cycle
+ * (ImageLibrary itself uses these field components).
+ */
+type PickerOpener = (opts: {
+  onPick: (image: LibraryImage) => void;
+}) => void;
+
+let openPickerImpl: PickerOpener | null = null;
+export function registerImagePicker(fn: PickerOpener | null) {
+  openPickerImpl = fn;
+}
+
+/**
+ * A URL field for an image, with the library picker beside it.
+ *
+ * Alt text stays the caller's business — the composite blocks mark it required
+ * — but picking from the library fills it in from the image's default alt so
+ * the common path starts correct.
+ */
+export function ImageUrlField({
+  label = 'Image URL',
+  value,
+  onChange,
+  onPickAlt,
+  displayWidth,
+  hint,
+}: {
+  label?: string;
+  value: string;
+  onChange: (v: string) => void;
+  /** called with the library default alt when one is picked */
+  onPickAlt?: (alt: string) => void;
+  /** rendered width in px, for the resolution note */
+  displayWidth?: number;
+  hint?: string;
+}) {
+  const images = useEditor((s) => s.images);
+  const addImage = useEditor((s) => s.addImage);
+  const brandId = useEditor((s) => s.design.brandId);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  const known = findByUrl(images, value);
+  const check = validateImageUrl(value);
+  const isTag = /^(\{\{|\*\||\[%)/.test((value || '').trim());
+  const note = known && displayWidth ? resolutionNote(known.width, displayWidth) : null;
+
+  const pick = () => {
+    if (!openPickerImpl) return;
+    openPickerImpl({
+      onPick: (image) => {
+        onChange(image.url);
+        if (image.defaultAlt) onPickAlt?.(image.defaultAlt);
+        setError('');
+        setSaved(false);
+      },
+    });
+  };
+
+  const saveToLibrary = async () => {
+    const result = validateImageUrl(value);
+    if (!result.ok) return setError(result.message ?? 'That URL cannot be used.');
+    const probe = await probeImage(result.url);
+    addImage(
+      makeLibraryImage(result.url, {
+        width: probe.width,
+        height: probe.height,
+        status: probe.ok ? 'ok' : 'broken',
+        checkedAt: Date.now(),
+        brandId,
+      }),
+    );
+    setSaved(true);
+    setError('');
+  };
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600">{label}</span>
+        <button
+          type="button"
+          onClick={pick}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+        >
+          <ImageIcon size={12} /> Choose from library
+        </button>
+      </div>
+
+      <input
+        aria-label={label}
+        className={inputCls}
+        value={value}
+        placeholder="https://…"
+        onChange={(e) => {
+          onChange(e.target.value);
+          setError('');
+          setSaved(false);
+        }}
+      />
+
+      {hint && <span className="mt-1 block text-[11px] leading-snug text-slate-400">{hint}</span>}
+
+      {/* a URL that is not in the library yet is one keystroke from being reusable */}
+      {value.trim() && !isTag && check.ok && !known && !saved && (
+        <button
+          type="button"
+          onClick={() => void saveToLibrary()}
+          className="mt-1 flex items-center gap-1 text-[11px] font-medium text-brand-700 hover:underline"
+        >
+          <Plus size={11} /> Save to library
+        </button>
+      )}
+      {saved && <span className="mt-1 block text-[11px] text-emerald-700">Saved to the library.</span>}
+      {known && (
+        <span className="mt-1 block truncate text-[11px] text-slate-400">
+          From the library: {known.name}
+          {known.width > 0 ? ` · ${known.width}×${known.height}` : ''}
+        </span>
+      )}
+
+      {value.trim() && !isTag && !check.ok && (
+        <span className="mt-1 block text-[11px] leading-snug text-red-600">{check.message}</span>
+      )}
+      {error && <span className="mt-1 block text-[11px] leading-snug text-red-600">{error}</span>}
+      {note && (
+        <span className="mt-1 block text-[11px] leading-snug text-amber-700">{note.message}</span>
       )}
     </div>
   );

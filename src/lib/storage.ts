@@ -1,6 +1,7 @@
 import type { Brand, Design } from '../types';
 import { normalizeBrand, veeBrand } from './brand';
 import { type SavedBlock, normalizeSavedBlock } from './blocks-library';
+import { type LibraryImage, normalizeLibraryImage } from './image-storage';
 import { normalizeDesign } from './design-ops';
 import { uid } from './util';
 import {
@@ -19,6 +20,7 @@ const SAMPLE_KEY = 'email-builder:sample:v1';
 const BLOCKS_KEY = 'email-builder:blocks:v1';
 const VERSIONS_KEY = 'email-builder:versions:v1';
 const SESSION_KEY = 'email-builder:session:v1';
+const IMAGES_KEY = 'email-builder:images:v1';
 
 /**
  * Stamped on every record this module writes. Records without it were written
@@ -382,4 +384,26 @@ export function migrateDraft(): SavedTemplate | null {
     // leaving the key behind is harmless: the record now exists either way
   }
   return entry;
+}
+
+/* ---------------------------------------------------------- image library */
+
+/**
+ * URLs the team has vetted, with their names and default alt text. Backed by
+ * the same quota-safe writer as everything else here.
+ */
+export function listImages(): LibraryImage[] {
+  const raw = read<unknown[]>(IMAGES_KEY);
+  const out: LibraryImage[] = [];
+  if (Array.isArray(raw)) {
+    for (const i of raw) {
+      const image = normalizeLibraryImage(i);
+      if (image) out.push(image);
+    }
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function saveImages(images: LibraryImage[]): WriteResult {
+  return writeSafe(IMAGES_KEY, images);
 }

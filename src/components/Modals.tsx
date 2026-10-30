@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Download, Monitor, Smartphone, Trash2, X } from 'lucide-react';
 import type { Device } from '../types';
-import { auditImageSources } from '../lib/audit';
+import {
+  type ImageProblemKind,
+  PROBLEM_HELP,
+  PROBLEM_LABEL,
+  auditDesignImages,
+  collectImages,
+  groupProblems,
+} from '../lib/image-audit';
+import { probeImage } from '../lib/image-storage';
 import { resolveForOutput, resolvedDesign } from '../lib/output';
 import { toPlainText } from '../lib/plaintext';
 import { renderDesign } from '../lib/render';
@@ -130,8 +138,35 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
 
   const body = tab === 'html' ? html : plain;
   const kb = Math.round((new Blob([body]).size / 1024) * 10) / 10;
-  const images = useMemo(() => auditImageSources(html), [html]);
   const utmOn = design.body.utm.enabled;
+  const select = useEditor((s) => s.select);
+
+  // the checks walk the resolved design, so every finding knows its block and
+  // the hero background is included — neither is possible from the HTML
+  const uses = useMemo(() => collectImages(out.design), [out]);
+  /** URLs we have actually probed; an unchecked image is never called broken */
+  const [loadStatus, setLoadStatus] = useState<Map<string, 'ok' | 'broken'>>(new Map());
+  const [checking, setChecking] = useState(false);
+  const problems = useMemo(() => auditDesignImages(uses, loadStatus), [uses, loadStatus]);
+  const grouped = useMemo(() => groupProblems(problems), [problems]);
+
+  const checkLoads = async () => {
+    setChecking(true);
+    const next = new Map(loadStatus);
+    for (const url of new Set(uses.map((u) => u.url))) {
+      if (!/^https:\/\//i.test(url)) continue;
+      const probe = await probeImage(url);
+      next.set(url, probe.ok ? 'ok' : 'broken');
+    }
+    setLoadStatus(next);
+    setChecking(false);
+  };
+
+  /** Close the dialog and put the cursor on the block that needs attention. */
+  const jumpTo = (blockId: string) => {
+    select({ kind: 'block', id: blockId });
+    onClose();
+  };
 
   const copy = async () => {
     try {
@@ -188,33 +223,56 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
           </button>
         </div>
       </div>
-      {tab === 'html' && !images.ok && (
-        <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-900">
-          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-medium">Images need attention before you send</p>
-            {images.embedded > 0 && (
-              <p className="mt-0.5">
-                {images.embedded} embedded {images.embedded === 1 ? 'image is' : 'images are'} a{' '}
-                <code>data:</code> URI. Gmail and most clients strip these — upload the file to your
-                storage/CDN and paste the https URL instead (brand logos: use the hosted logo URL
-                field).
-              </p>
-            )}
-            {images.insecure.length > 0 && (
-              <p className="mt-0.5">
-                Not served over https: {images.insecure.slice(0, 3).join(', ')}
-                {images.insecure.length > 3 ? ` and ${images.insecure.length - 3} more` : ''}.
-              </p>
-            )}
-            {images.placeholders > 0 && (
-              <p className="mt-0.5">
-                <strong>Placeholder images still in use</strong> — {images.placeholders}{' '}
-                {images.placeholders === 1 ? 'image is' : 'images are'} stock art from a preset.
-                Swap in the real artwork (and its alt text) before sending.
-              </p>
-            )}
+      {tab === 'html' && (
+        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 bg-slate-50 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-medium text-slate-700">
+              Images — {uses.length} in this email
+              {problems.length === 0 && uses.length > 0 && (
+                <span className="ml-2 font-normal text-emerald-700">nothing to fix</span>
+              )}
+            </p>
+            <button
+              type="button"
+              className={ghostBtn}
+              disabled={checking || uses.length === 0}
+              onClick={() => void checkLoads()}
+            >
+              {checking ? 'Checking…' : 'Check images load'}
+            </button>
           </div>
+
+          {grouped.length > 0 && (
+            <ul className="mt-2 space-y-2">
+              {grouped.map(([kind, items]) => (
+                <li key={kind}>
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
+                    <AlertTriangle size={13} className="shrink-0" />
+                    {PROBLEM_LABEL[kind as ImageProblemKind]} · {items.length}
+                  </p>
+                  <p className="ml-[18px] text-[11px] leading-snug text-slate-500">
+                    {PROBLEM_HELP[kind as ImageProblemKind]}
+                  </p>
+                  <ul className="ml-[18px] mt-1 flex flex-wrap gap-1.5">
+                    {items.map((p, n) => (
+                      <li key={`${kind}-${p.use.blockId}-${p.use.field}-${n}`}>
+                        <button
+                          type="button"
+                          onClick={() => jumpTo(p.use.blockId)}
+                          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 hover:border-brand-500 hover:text-brand-700"
+                        >
+                          {p.use.label} →
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-[11px] leading-snug text-slate-400">
+            Warnings only — the export is never blocked.
+          </p>
         </div>
       )}
       <textarea
