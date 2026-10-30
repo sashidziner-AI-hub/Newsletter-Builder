@@ -18,6 +18,7 @@ import { GripVertical } from 'lucide-react';
 import type { BlockType } from '../types';
 import { BLOCK_META } from '../lib/defaults';
 import { findBlock, findColumn } from '../lib/design-ops';
+import type { SavedBlock } from '../lib/blocks-library';
 import { useEditor } from '../store';
 import { BlockIcon } from './icons';
 
@@ -29,7 +30,7 @@ export type Hint =
 const HintContext = createContext<Hint | null>(null);
 export const useDropHint = () => useContext(HintContext);
 
-export type DragKind = 'tool' | 'layout' | 'block' | 'row';
+export type DragKind = 'tool' | 'layout' | 'block' | 'row' | 'saved-block' | 'saved-row';
 
 export interface DragData {
   kind: DragKind;
@@ -37,6 +38,8 @@ export interface DragData {
   layout?: number[];
   blockId?: string;
   rowId?: string;
+  /** a library item, for the two 'saved-*' kinds */
+  saved?: SavedBlock;
 }
 
 interface ActiveInfo {
@@ -56,7 +59,7 @@ const RANK_ROWS: Record<string, number> = { row: 0, canvas: 1 };
  */
 const collisionDetection: CollisionDetection = (args) => {
   const kind = args.active.data.current?.kind as DragKind | undefined;
-  const wantRows = kind === 'row' || kind === 'layout';
+  const wantRows = kind === 'row' || kind === 'layout' || kind === 'saved-row';
   const rank = wantRows ? RANK_ROWS : RANK_BLOCKS;
   const kindOf = (id: string | number) =>
     args.droppableContainers.find((c) => c.id === id)?.data.current?.kind as string | undefined;
@@ -88,7 +91,7 @@ export function computeHint(kind: DragKind, over: Over | null, pointerY: number 
   if (!od) return null;
   const after = pointerY !== null && pointerY > over.rect.top + over.rect.height / 2;
 
-  if (kind === 'row' || kind === 'layout') {
+  if (kind === 'row' || kind === 'layout' || kind === 'saved-row') {
     if (od.kind === 'canvas') return { type: 'row', index: design.rows.length };
     if (od.kind === 'row' && od.rowId) {
       const i = design.rows.findIndex((r) => r.id === od.rowId);
@@ -129,6 +132,14 @@ export function applyDrop(d: DragData, target: Hint): void {
     case 'row':
       if (target.type === 'row' && d.rowId) st.moveRow(d.rowId, target.index);
       break;
+    case 'saved-block':
+      if (!d.saved) return;
+      if (target.type === 'block') st.insertSavedBlock(d.saved, target.columnId, target.index);
+      else st.insertSavedBlock(d.saved, undefined, target.index);
+      break;
+    case 'saved-row':
+      if (target.type === 'row' && d.saved) st.insertSavedBlock(d.saved, undefined, target.index);
+      break;
   }
 }
 
@@ -151,13 +162,14 @@ export function DndShell({ children }: { children: ReactNode }) {
 
   const onDragStart = (e: DragStartEvent) => {
     const d = e.active.data.current as
-      | { kind: DragKind; blockType?: BlockType; layout?: number[]; blockId?: string }
+      | { kind: DragKind; blockType?: BlockType; layout?: number[]; blockId?: string; saved?: SavedBlock }
       | undefined;
     if (!d) return;
     let label = 'Row';
     let blockType = d.blockType;
     if (d.kind === 'tool' && blockType) label = BLOCK_META.find((m) => m.type === blockType)?.label ?? 'Block';
     if (d.kind === 'layout') label = `${d.layout?.length ?? 1} column row`;
+    if (d.kind === 'saved-block' || d.kind === 'saved-row') label = d.saved?.name ?? 'Saved block';
     if (d.kind === 'block' && d.blockId) {
       const loc = findBlock(useEditor.getState().design, d.blockId);
       blockType = loc?.block.type;

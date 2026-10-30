@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { renderDesign, renderBlock, columnWidths, videoThumb } from '../lib/render';
 import { createBlock, createRow, emptyDesign } from '../lib/defaults';
-import { STARTERS } from '../lib/starters';
+import { PRESETS } from '../lib/presets';
+import { resolveDesign, veeBrand } from '../lib/brand';
 import { normalizeDesign } from '../lib/design-ops';
 
 function designWith(...blocks: ReturnType<typeof createBlock>[]) {
@@ -90,9 +91,9 @@ describe('renderer', () => {
     expect(html.length).toBeGreaterThan(1000);
   });
 
-  it('all starter templates render and round-trip through normalizeDesign', () => {
-    for (const s of STARTERS) {
-      const design = s.build();
+  it('all presets render and round-trip through normalizeDesign', () => {
+    for (const s of PRESETS) {
+      const design = resolveDesign(s.build(veeBrand()), veeBrand(), 'export');
       const html = renderDesign(design);
       expect(html).toContain('</html>');
       const again = normalizeDesign(JSON.parse(JSON.stringify(design)));

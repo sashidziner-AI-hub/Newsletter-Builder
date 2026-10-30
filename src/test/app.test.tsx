@@ -10,8 +10,19 @@ vi.mock('../components/RichTextEditor', () => ({
 
 import App from '../App';
 import { useEditor } from '../store';
+import { listTemplates } from '../lib/storage';
+import {
+  type LibraryImage,
+  UPLOAD_UNAVAILABLE,
+  makeLibraryImage,
+} from '../lib/image-storage';
+import { emptyBrand, veeBrand } from '../lib/brand';
 
 const s = () => useEditor.getState();
+
+/** Row layouts moved behind the left panel's Rows tab in 2B. */
+const openRowsTab = () => fireEvent.click(screen.getByText('Rows'));
+const openContentTab = () => fireEvent.click(screen.getByText('Content'));
 
 beforeEach(() => {
   localStorage.clear();
@@ -27,9 +38,11 @@ describe('App', () => {
 
   it('builds an email by clicking: row, heading, edit text, undo', () => {
     render(<App />);
+    openRowsTab();
     fireEvent.click(screen.getByTitle('Add 2 columns row'));
     expect(s().design.rows).toHaveLength(1);
 
+    openContentTab();
     fireEvent.click(screen.getByTitle('Add Heading'));
     const canvas = () => within(screen.getByRole('main'));
     expect(canvas().getByText('Your heading here')).toBeTruthy();
@@ -45,21 +58,70 @@ describe('App', () => {
     expect(canvas().getByText('Hello world')).toBeTruthy();
   });
 
-  it('adds every block type via click', () => {
+  it('adds every block type via click', { timeout: 20_000 }, () => {
     render(<App />);
-    for (const label of ['Heading', 'Text', 'Image', 'Button', 'Divider', 'Menu', 'Social', 'Video', 'HTML']) {
+    for (const label of [
+      'Heading',
+      'Text',
+      'Image',
+      'Button',
+      'Divider',
+      'Menu',
+      'Social',
+      'Video',
+      'HTML',
+      'Header',
+      'Hero',
+      'Article list',
+      'Footer',
+    ]) {
       fireEvent.click(screen.getByTitle(`Add ${label}`));
     }
     const types = s().design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks.map((b) => b.type)));
-    expect(types).toEqual(['heading', 'text', 'image', 'button', 'divider', 'menu', 'social', 'video', 'html']);
+    expect(types).toEqual([
+      'heading',
+      'text',
+      'image',
+      'button',
+      'divider',
+      'menu',
+      'social',
+      'video',
+      'html',
+      'header',
+      'hero',
+      'articles',
+      'footer',
+    ]);
   });
 
-  it('Delete key removes the selected block, Escape selects the email settings', () => {
+  it('Delete key asks first, then removes the selected block', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Button'));
     expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+
+    // the key press only opens the dialog — the block survives until confirmed
     fireEvent.keyDown(window, { key: 'Delete' });
+    expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Delete this block?')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByText('Delete'));
     expect(s().design.rows[0].columns[0].blocks).toHaveLength(0);
+  });
+
+  it('Delete key cancelled keeps the block', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Button'));
+    fireEvent.keyDown(window, { key: 'Delete' });
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Cancel'));
+    expect(s().design.rows[0].columns[0].blocks).toHaveLength(1);
+  });
+
+  it('Escape selects the email settings', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Button'));
+    fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.getByText('Email settings')).toBeTruthy();
   });
 
@@ -72,7 +134,9 @@ describe('App', () => {
 
   it('changing the row layout from the row panel keeps blocks', () => {
     render(<App />);
+    openRowsTab();
     fireEvent.click(screen.getByTitle('Add 3 columns row'));
+    openContentTab();
     fireEvent.click(screen.getByTitle('Add Text'));
     fireEvent.click(screen.getByTitle('Add Button')); // second block in the same (first) column
     act(() => s().select({ kind: 'row', id: s().design.rows[0].id }));
@@ -90,8 +154,8 @@ describe('App', () => {
   it('exports HTML and previews', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Heading'));
-    fireEvent.click(screen.getByTitle('Export HTML'));
-    const dialog = screen.getByRole('dialog', { name: 'Export HTML' });
+    fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+    const dialog = screen.getByRole('dialog', { name: 'Export' });
     const code = within(dialog).getByRole<HTMLTextAreaElement>('textbox');
     expect(code.value).toContain('<!DOCTYPE html>');
     expect(code.value).toContain('Your heading here');
@@ -105,27 +169,583 @@ describe('App', () => {
     expect(frame.getAttribute('srcdoc')).toContain('Your heading here');
   });
 
-  it('saves a template and opens it again', () => {
+  it('names an auto-saved email and opens it again', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Heading'));
+    // auto-save creates the record; this test does not wait for the debounce
+    act(() => s().saveNow());
+
     fireEvent.click(screen.getByTitle('Templates'));
-    fireEvent.change(screen.getByPlaceholderText('Template name'), { target: { value: 'My promo' } });
-    fireEvent.click(screen.getByText('Save current design'));
+    fireEvent.change(screen.getByLabelText('Email name'), { target: { value: 'My promo' } });
+    fireEvent.click(screen.getByText('Rename this email'));
     expect(screen.getByText('My promo')).toBeTruthy();
+    // naming it moves it out of the drafts group
+    expect(screen.getByText('My templates')).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Close'));
 
-    s().resetDesign();
+    act(() => s().resetDesign());
     expect(s().design.rows).toHaveLength(0);
     fireEvent.click(screen.getByTitle('Templates'));
     fireEvent.click(screen.getByText('Open'));
     expect(s().design.rows).toHaveLength(1);
   });
 
-  it('starter templates load', () => {
+  it('saves a copy under a new name without touching the original', () => {
     render(<App />);
+    fireEvent.click(screen.getByTitle('Add Heading'));
+    act(() => s().saveNow());
+    const originalId = s().currentEmailId;
+
     fireEvent.click(screen.getByTitle('Templates'));
-    fireEvent.click(screen.getByText('Starter templates'));
-    fireEvent.click(screen.getAllByText('Use this template')[0]);
+    fireEvent.change(screen.getByLabelText('Email name'), { target: { value: 'Variant B' } });
+    fireEvent.click(screen.getByText('Save as a copy'));
+
+    // editing moves to the copy, and the original record still exists
+    expect(s().currentEmailId).not.toBe(originalId);
+    expect(listTemplates().some((t) => t.id === originalId)).toBe(true);
+    expect(listTemplates().some((t) => t.name === 'Variant B')).toBe(true);
+  });
+
+  it('presets load from the New email dialog', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('New email'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Blank')).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByText('Newsletter'));
     expect(s().design.rows.length).toBeGreaterThan(2);
+    // the preset brought its own subject line
+    expect(s().design.body.title).toContain('This month at');
+  });
+
+  it('the New email dialog offers a blank start that keeps the brand', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('New email'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Blank'));
+    expect(s().design.rows).toHaveLength(0);
+    expect(s().design.brandId).toBe('brand_vee');
+  });
+
+  describe('replacing the canvas', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    afterEach(() => confirmSpy.mockClear());
+
+    const startBlank = () => {
+      fireEvent.click(screen.getByTitle('New email'));
+      fireEvent.click(within(screen.getByRole('dialog')).getByText('Blank'));
+    };
+
+    it('does not ask once the work is saved — that is the point of auto-save', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      act(() => s().saveNow());
+      expect(s().dirty).toBe(false);
+
+      startBlank();
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(0);
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('asks in an in-app dialog while a change is still unflushed', () => {
+      render(<App />);
+      // an edit with no saveNow(): the debounce has not run, so this is pending
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      expect(s().dirty).toBe(true);
+      const rows = s().design.rows.length;
+
+      startBlank();
+
+      // the native dialog must never be used
+      expect(confirmSpy).not.toHaveBeenCalled();
+      const dialog = screen.getByRole('alertdialog');
+      expect(within(dialog).getByText('Start a new email?')).toBeTruthy();
+
+      fireEvent.click(within(dialog).getByText('Cancel'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(rows);
+    });
+
+    it('performs the action once confirmed', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      startBlank();
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Start new'));
+
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(s().design.rows).toHaveLength(0);
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips the dialog entirely on an untouched canvas', () => {
+      render(<App />);
+      expect(s().dirty).toBe(false);
+      startBlank();
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
+  describe('brand switcher', () => {
+    const acme = () => {
+      const b = emptyBrand('Acme Health');
+      b.id = 'brand_acme';
+      b.tokens.colors.primary = '#0D9488';
+      b.tokens.colors.link = '#0D9488';
+      b.tokens.colors.page_bg = '#ECFDF5';
+      return b;
+    };
+
+    beforeEach(() => {
+      act(() => useEditor.setState({ brands: [veeBrand(), acme()] }));
+      s().resetDesign();
+    });
+
+    it('lists the accessible brands and re-themes the canvas without losing content', () => {
+      render(<App />);
+      // scope colour assertions to the canvas: the property panel also paints
+      // brand swatches, which would match either brand's palette
+      const canvasHtml = () => screen.getByRole('main').innerHTML;
+
+      const switcher = screen.getByLabelText('Brand') as HTMLSelectElement;
+      expect(Array.from(switcher.options).map((o) => o.textContent)).toEqual([
+        'Vee Technologies',
+        'Acme Health',
+      ]);
+
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      act(() => s().updateBlock(s().design.rows[0].columns[0].blocks[0].id, { color: 'brand.primary' }));
+      expect(canvasHtml()).toContain('#F58220');
+
+      const before = s().design.rows;
+      fireEvent.change(switcher, { target: { value: 'brand_acme' } });
+
+      // re-themed...
+      expect(s().design.brandId).toBe('brand_acme');
+      expect(canvasHtml()).toContain('#0D9488');
+      expect(canvasHtml()).not.toContain('#F58220');
+      // ...without touching the content
+      expect(s().design.rows).toEqual(before);
+      expect(within(screen.getByRole('main')).getByText('Your heading here')).toBeTruthy();
+    });
+
+    it('falls back to the default brand when the design points at a missing brand', () => {
+      act(() => s().setBrandId('brand_gone'));
+      render(<App />);
+      expect((screen.getByLabelText('Brand') as HTMLSelectElement).value).toBe('brand_vee');
+    });
+
+    it('opens the brands manager and shows the seeded brand', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Manage brands'));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('Vee Technologies')).toBeTruthy();
+      expect(within(dialog).getByText('New brand')).toBeTruthy();
+    });
+  });
+
+  describe('composite blocks (1B)', () => {
+    const blockValues = <T,>(type: string): T => {
+      const b = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((x) => x.type === type);
+      return b!.values as T;
+    };
+
+    it('the article list repeater adds, reorders and removes items', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Article list'));
+
+      type Items = { items: { id: string; title: string }[] };
+      expect(blockValues<Items>('articles').items).toHaveLength(2);
+      const originalSecond = blockValues<Items>('articles').items[1].title;
+
+      // add
+      fireEvent.click(screen.getByText('Add item'));
+      expect(blockValues<Items>('articles').items).toHaveLength(3);
+
+      // reorder: move #2 up, its data must come along
+      fireEvent.click(screen.getByLabelText('Move item 2 up'));
+      expect(blockValues<Items>('articles').items[0].title).toBe(originalSecond);
+
+      // remove
+      fireEvent.click(screen.getByLabelText('Remove item 3'));
+      expect(blockValues<Items>('articles').items).toHaveLength(2);
+      expect(blockValues<Items>('articles').items[0].title).toBe(originalSecond);
+    });
+
+    it('the hero card count follows the chosen layout', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+
+      type Cards = { cards: unknown[]; layout: string };
+      fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'cards-3' } });
+      expect(blockValues<Cards>('hero').cards).toHaveLength(3);
+
+      fireEvent.change(screen.getByLabelText('Arrangement'), { target: { value: 'cards-2' } });
+      expect(blockValues<Cards>('hero').cards).toHaveLength(2);
+    });
+
+    it('Show footer off dims the footer on the canvas and leaves it out of the export', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Footer'));
+
+      // the toggle lives in Email settings
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByText('Email settings')).toBeTruthy();
+      expect(s().design.body.showFooter).toBe(true);
+
+      fireEvent.click(screen.getByRole('switch', { name: 'Show footer' }));
+      expect(s().design.body.showFooter).toBe(false);
+      expect(screen.getByText('Hidden on send')).toBeTruthy();
+
+      // ...and the export drops it
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const html = (screen.getByRole('dialog').querySelector('textarea') as HTMLTextAreaElement).value;
+      expect(html).not.toContain('{{unsubscribe_url}}');
+    });
+
+    it('marks a missing image alt as required', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+      const alt = screen.getByLabelText('Image alt text');
+      fireEvent.change(alt, { target: { value: '' } });
+      expect(screen.getByText(/Required/)).toBeTruthy();
+    });
+  });
+
+  describe('merge tags, UTM and plain text (2A)', () => {
+    /** The text currently shown in the export dialog's active tab. */
+    const exportText = () => {
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const value = (screen.getByRole('dialog').querySelector('textarea') as HTMLTextAreaElement)
+        .value;
+      fireEvent.click(screen.getByLabelText('Close'));
+      return value;
+    };
+
+    const openSettings = () => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.getByText('Email settings')).toBeTruthy();
+    };
+
+    it('inserts a merge tag into a heading from the tag menu', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+
+      const field = screen.getByLabelText('Heading text') as HTMLTextAreaElement;
+      fireEvent.change(field, { target: { value: 'Hello ' } });
+      field.setSelectionRange(6, 6);
+
+      // the panel's insert-tag menu
+      fireEvent.click(screen.getAllByLabelText('Insert a merge tag')[0]);
+      fireEvent.click(screen.getByText('First name'));
+
+      expect((screen.getByLabelText('Heading text') as HTMLTextAreaElement).value).toBe(
+        'Hello {{first_name}}',
+      );
+    });
+
+    it('switching format changes the export but not the stored content', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'Hello {{first_name}}' },
+      });
+
+      expect(exportText()).toContain('Hello {{first_name}}');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Merge tags'));
+      fireEvent.change(screen.getByLabelText('Merge tag format'), {
+        target: { value: 'mailchimp' },
+      });
+
+      // the export is converted...
+      const html = exportText();
+      expect(html).toContain('Hello *|FNAME|*');
+      expect(html).not.toContain('{{first_name}}');
+
+      // ...while the stored block is untouched
+      const heading = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'heading')!;
+      expect((heading.values as { text: string }).text).toBe('Hello {{first_name}}');
+    });
+
+    it('UTM is off by default and tags links once enabled, sparing unsubscribe', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Footer'));
+      fireEvent.click(screen.getByTitle('Add Button'));
+
+      expect(s().design.body.utm.enabled).toBe(false);
+      expect(exportText()).not.toContain('utm_source');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Link tracking'));
+      fireEvent.click(screen.getByRole('switch', { name: 'Add UTM parameters' }));
+      fireEvent.change(screen.getByLabelText('utm_source'), { target: { value: 'newsletter' } });
+
+      const html = exportText();
+      expect(html).toContain('utm_source=newsletter');
+      expect(html).toContain('utm_medium=email');
+      // the unsubscribe link is left exactly as it was
+      expect(html).toContain('href="{{unsubscribe_url}}"');
+      expect(html).not.toContain('{{unsubscribe_url}}?utm');
+    });
+
+    it('offers a plain-text tab with no HTML in it', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'A plain heading' },
+      });
+
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByText('Plain text'));
+
+      const value = (
+        within(dialog).getByLabelText('Exported plain text') as HTMLTextAreaElement
+      ).value;
+      expect(value).toContain('A plain heading');
+      expect(value).not.toMatch(/<\/?[a-z][^>]*>/i);
+    });
+
+    it('sample data previews on the canvas but never in the export', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      fireEvent.change(screen.getByLabelText('Heading text'), {
+        target: { value: 'Hi {{first_name}}' },
+      });
+
+      const canvas = () => screen.getByRole('main').innerHTML;
+      expect(canvas()).toContain('{{first_name}}');
+
+      openSettings();
+      fireEvent.click(screen.getByText('Merge tags'));
+      fireEvent.click(screen.getByRole('switch', { name: 'Preview with sample data' }));
+
+      expect(canvas()).toContain('Hi John');
+      expect(canvas()).not.toContain('{{first_name}}');
+      // the export still carries the tag
+      expect(exportText()).toContain('Hi {{first_name}}');
+    });
+  });
+
+  describe('image library (2C-1)', () => {
+    const seed = (over: Partial<LibraryImage> = {}) =>
+      makeLibraryImage('https://cdn.example.com/spring-hero.jpg', {
+        name: 'Spring hero',
+        defaultAlt: 'Sun over a bay',
+        width: 1200,
+        height: 800,
+        status: 'ok',
+        ...over,
+      });
+
+    beforeEach(() => {
+      act(() => useEditor.setState({ images: [seed()] }));
+    });
+
+    it('the picker fills both the URL and the alt text', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+
+      fireEvent.click(screen.getByText('Choose from library'));
+      const dialog = screen.getByRole('dialog', { name: 'Choose an image' });
+      fireEvent.click(within(dialog).getByLabelText('Use Spring hero'));
+
+      const block = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'image')!;
+      expect((block.values as { src: string }).src).toBe('https://cdn.example.com/spring-hero.jpg');
+      expect((block.values as { alt: string }).alt).toBe('Sun over a bay');
+    });
+
+    it('fills a composite block field through the same picker', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Hero'));
+
+      // the hero image field, not the background one
+      fireEvent.click(screen.getAllByText('Choose from library')[0]);
+      const dialog = screen.getByRole('dialog', { name: 'Choose an image' });
+      fireEvent.click(within(dialog).getByLabelText('Use Spring hero'));
+
+      const hero = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'hero')!;
+      expect((hero.values as { imageSrc: string }).imageSrc).toBe(
+        'https://cdn.example.com/spring-hero.jpg',
+      );
+      expect((hero.values as { imageAlt: string }).imageAlt).toBe('Sun over a bay');
+    });
+
+    it('rejects a non-https URL in the field with a reason', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'http://cdn.example.com/a.png' },
+      });
+      expect(screen.getByText(/Only https URLs work in email/)).toBeTruthy();
+    });
+
+    it('refuses a device upload instead of embedding a data: URI', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      // several file inputs exist (library/blocks import); this is the block's
+      const input = document.querySelector('input[type=file][accept="image/*"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.change(input);
+
+      expect(screen.getByText(UPLOAD_UNAVAILABLE)).toBeTruthy();
+      const block = s()
+        .design.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))
+        .find((b) => b.type === 'image')!;
+      // nothing was written, least of all a data: URI
+      expect((block.values as { src: string }).src).toBe('');
+    });
+
+    it('shows the library as a left-panel tab', () => {
+      render(<App />);
+      fireEvent.click(screen.getByText('Images'));
+      expect(screen.getByLabelText('Search images')).toBeTruthy();
+      expect(screen.getByText('Spring hero')).toBeTruthy();
+    });
+
+    it('offers to save a pasted URL that is not in the library yet', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'https://cdn.example.com/brand-new.png' },
+      });
+      expect(screen.getByText('Save to library')).toBeTruthy();
+
+      // a URL already known shows its library name instead
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'https://cdn.example.com/spring-hero.jpg' },
+      });
+      expect(screen.queryByText('Save to library')).toBeNull();
+      expect(screen.getByText(/From the library: Spring hero/)).toBeTruthy();
+    });
+
+    it('summarises checks in the export dialog and hands the detail to the drawer', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Image'));
+      const selection = s().selection;
+      const blockId = selection.kind === 'block' ? selection.id : '';
+      fireEvent.change(screen.getByLabelText('Image URL'), {
+        target: { value: 'http://cdn.example.com/insecure.png' },
+      });
+      // deselect, so the jump has somewhere to land
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(s().selection.kind).toBe('body');
+
+      // the 500 ms debounce is not worth waiting out in a test
+      act(() => s().runChecks());
+
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = screen.getByRole('dialog', { name: 'Export' });
+      // a count, not a second copy of the list
+      expect(within(dialog).getByText(/\d+ error/)).toBeTruthy();
+      expect(within(dialog).queryByText(/not served over https/i)).toBeNull();
+
+      fireEvent.click(within(dialog).getByText(/Open checks/));
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      const drawer = within(screen.getByRole('complementary', { name: 'Checks' }));
+      expect(drawer.getByText(/is not served over https/i)).toBeTruthy();
+      expect(drawer.getByText(/has no alt text/i)).toBeTruthy();
+
+      fireEvent.click(drawer.getAllByText(/Go to block/)[0]);
+      expect(s().selection).toEqual({ kind: 'block', id: blockId });
+    });
+  });
+
+  describe('checks', () => {
+    // the drawer lives in the store, which outlives one test
+    beforeEach(() => act(() => s().setChecksOpen(false)));
+
+    /** An email with one obvious error: an empty subject line. */
+    const breakTheSubject = () => {
+      act(() => s().updateBody({ title: '' }));
+      act(() => s().runChecks());
+    };
+
+    it('shows the count in the top bar and opens the drawer', () => {
+      render(<App />);
+      breakTheSubject();
+
+      const button = screen.getByRole('button', { name: /^Checks:/ });
+      expect(button.getAttribute('aria-label')).toMatch(/[1-9] error/);
+      expect(screen.queryByRole('complementary', { name: 'Checks' })).toBeNull();
+
+      fireEvent.click(button);
+      const drawer = within(screen.getByRole('complementary', { name: 'Checks' }));
+      expect(drawer.getByText(/no subject line/i)).toBeTruthy();
+    });
+
+    it('ignoring an issue drops it from the badge, and it survives reopening the email', () => {
+      render(<App />);
+      breakTheSubject();
+      act(() => s().saveNow());
+      const emailId = s().currentEmailId!;
+
+      act(() => s().setChecksOpen(true));
+      const drawer = () => within(screen.getByRole('complementary', { name: 'Checks' }));
+      const before = s().issues.length;
+
+      fireEvent.click(drawer().getAllByText('Ignore')[0]);
+      expect(s().ignoredIssues).toHaveLength(1);
+      // the issue is still known, just not counted
+      expect(s().issues).toHaveLength(before);
+      expect(drawer().getByText(/Ignored \(1\)/)).toBeTruthy();
+
+      // reopen the email from storage: the dismissal came back with it
+      const ignored = s().ignoredIssues;
+      act(() => s().startNewEmail(s().design));
+      expect(s().ignoredIssues).toEqual([]);
+      act(() => s().openEmail(listTemplates().find((t) => t.id === emailId)!));
+      expect(s().ignoredIssues).toEqual(ignored);
+    });
+
+    it('un-ignoring brings the issue back without a re-run', () => {
+      render(<App />);
+      breakTheSubject();
+      act(() => s().setChecksOpen(true));
+      const drawer = () => within(screen.getByRole('complementary', { name: 'Checks' }));
+
+      fireEvent.click(drawer().getAllByText('Ignore')[0]);
+      fireEvent.click(drawer().getByText(/Ignored \(1\)/));
+      fireEvent.click(drawer().getByText('Un-ignore'));
+      expect(s().ignoredIssues).toEqual([]);
+      expect(drawer().getByText(/no subject line/i)).toBeTruthy();
+    });
+
+    it('never blocks the export', () => {
+      render(<App />);
+      breakTheSubject();
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Export' }));
+      // both buttons live and clickable with an error outstanding
+      expect(dialog.getByText('Copy').closest('button')!.disabled).toBe(false);
+      expect(dialog.getByText(/Download \.html/).closest('button')!.disabled).toBe(false);
+    });
+  });
+
+  it('keeps auto-saved drafts separate from named templates', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Heading'));
+    act(() => s().saveNow());
+
+    fireEvent.click(screen.getByTitle('Templates'));
+    const dialog = within(screen.getByRole('dialog'));
+    // an unnamed record lands in the drafts group, not among the templates
+    expect(dialog.getByText('Drafts (auto-saved)')).toBeTruthy();
+    expect(dialog.queryByText('My templates')).toBeNull();
+    // and the storage readout is there
+    expect(dialog.getByText(/Storage:/)).toBeTruthy();
   });
 });

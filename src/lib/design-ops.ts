@@ -66,6 +66,13 @@ export function normalizeDesign(input: unknown): Design | null {
 
   const validTypes = new Set<string>(BLOCK_META.map((m) => m.type));
   const body = { ...defaultBody(), ...((raw.body as object) ?? {}) };
+  // designs saved before 1B carry no showFooter; default it to on
+  if (typeof body.showFooter !== 'boolean') body.showFooter = true;
+  // 2A settings: a shallow spread cannot fill nested objects, so do it here
+  const fresh = defaultBody();
+  if (typeof body.mergeFormat !== 'string') body.mergeFormat = fresh.mergeFormat;
+  body.mergeCustom = { ...fresh.mergeCustom, ...((body.mergeCustom as object) ?? {}) };
+  body.utm = { ...fresh.utm, ...((body.utm as object) ?? {}) };
 
   const rows: Row[] = [];
   for (const r of raw.rows as Record<string, unknown>[]) {
@@ -106,5 +113,8 @@ export function normalizeDesign(input: unknown): Design | null {
     }
     rows.push(row);
   }
-  return { version: 1, body, rows };
+  // Designs saved before brands existed have no brandId; null means "default
+  // brand", and their literal colours are kept exactly as stored.
+  const brandId = typeof raw.brandId === 'string' && raw.brandId ? raw.brandId : null;
+  return { version: 1, brandId, body, rows };
 }

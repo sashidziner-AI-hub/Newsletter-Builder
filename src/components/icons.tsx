@@ -5,7 +5,11 @@ import {
   Menu,
   Minus,
   MousePointerClick,
+  Newspaper,
+  PanelBottom,
+  PanelTop,
   Share2,
+  Sparkles,
   Type,
   Video,
 } from 'lucide-react';
@@ -32,5 +36,13 @@ export function BlockIcon({ type, size = 20 }: { type: BlockType; size?: number 
       return <Video {...props} />;
     case 'html':
       return <Code {...props} />;
+    case 'header':
+      return <PanelTop {...props} />;
+    case 'hero':
+      return <Sparkles {...props} />;
+    case 'footer':
+      return <PanelBottom {...props} />;
+    case 'articles':
+      return <Newspaper {...props} />;
   }
 }

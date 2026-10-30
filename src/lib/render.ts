@@ -1,5 +1,16 @@
-import type { Block, Design, Padding, Row, SocialItem } from '../types';
-import { SOCIAL_NETWORKS } from './defaults';
+import type {
+  Align,
+  ArticleListValues,
+  Block,
+  Design,
+  FooterValues,
+  HeaderValues,
+  HeroValues,
+  Padding,
+  Row,
+  SocialItem,
+} from '../types';
+import { createBlock, pad, SOCIAL_NETWORKS } from './defaults';
 import { esc, safeUrl } from './util';
 
 export interface RenderCtx {
@@ -79,6 +90,93 @@ function sanitizeAndInline(
     last.setAttribute('style', s.replace(/margin:0 0 \d+px 0;/, 'margin:0;'));
   }
   return body.innerHTML;
+}
+
+/* ------------------------------------------------ composite block helpers */
+
+/**
+ * Build a throwaway sub-block so a composite block can render a part through
+ * the existing Menu / Social / Button renderer instead of duplicating its HTML.
+ * Anything not overridden comes from that block type's own defaults.
+ */
+function subBlock<T extends Block['type']>(
+  type: T,
+  values: Partial<Extract<Block, { type: T }>['values']>,
+): Extract<Block, { type: T }> {
+  const base = createBlock(type) as Extract<Block, { type: T }>;
+  return { ...base, values: { ...base.values, ...values } };
+}
+
+/** An email-safe <img>: width attribute, alt, border="0", display:block. */
+function imgTag(src: string, alt: string, width: number, extra = ''): string {
+  const url = safeUrl(src);
+  if (!url) return '';
+  return `<img class="eb-img" src="${esc(url)}" alt="${esc(alt)}" width="${width}" border="0" style="display:block;border:0;outline:none;text-decoration:none;width:${width}px;max-width:100%;height:auto;${extra}" />`;
+}
+
+/** Wrap cells in a table row; each cell stacks on mobile via .eb-col. */
+function colsTable(cells: string[], align: Align = 'left'): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" align="${align}"><tr>${cells.join('')}</tr></table>`;
+}
+
+const col = (
+  content: string,
+  opts: { width?: number; align?: string; classes?: string; style?: string; valign?: 'top' | 'middle' | 'bottom' } = {},
+) => {
+  const w = opts.width ? ` width="${opts.width}"` : '';
+  const wCss = opts.width ? `width:${opts.width}px;` : '';
+  const cls = `eb-col${opts.classes ? ` ${opts.classes}` : ''}`;
+  const va = opts.valign ?? 'top';
+  return `<td class="${cls}"${w} align="${opts.align ?? 'left'}" valign="${va}" style="${wCss}vertical-align:${va};${opts.style ?? ''}">${content}</td>`;
+};
+
+/** A text run with its own font/size/colour, used for every composite label. */
+function textRun(
+  text: string,
+  o: { fontFamily: string; fontSize: number; color: string; weight?: string; align?: Align; lineHeight?: number; bodyFont: string; marginTop?: number },
+): string {
+  if (!text.trim()) return '';
+  const mt = o.marginTop ? `padding-top:${o.marginTop}px;` : '';
+  return `<div style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;font-weight:${o.weight ?? 'normal'};line-height:${o.lineHeight ?? 140}%;color:${cssVal(o.color)};text-align:${o.align ?? 'left'};">${esc(text).replace(/\n/g, '<br />')}</div>`;
+}
+
+/** An inline text link, used for "Read more" and card links. */
+function linkRun(
+  label: string,
+  href: string,
+  o: { fontFamily: string; fontSize: number; color: string; align?: Align; bodyFont: string; marginTop?: number },
+): string {
+  if (!label.trim()) return '';
+  const url = safeUrl(href) || '#';
+  const mt = o.marginTop ? `padding-top:${o.marginTop}px;` : '';
+  return `<div style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;line-height:140%;text-align:${o.align ?? 'left'};"><a href="${esc(url)}" target="_blank" style="color:${cssVal(o.color)};text-decoration:underline;">${esc(label)}</a></div>`;
+}
+
+/** A horizontal rule as a table, for dividers between article items. */
+function ruleRow(color: string, spacing: number): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:${spacing}px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-top:1px solid ${cssVal(color)};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table></td></tr></table>`;
+}
+
+/** The hero / card CTA, rendered through the bulletproof Button renderer. */
+function ctaHtml(
+  v: HeroValues,
+  design: Design,
+  ctx: RenderCtx,
+  align: Align,
+): string {
+  if (!v.ctaLabel.trim()) return '';
+  const outline = v.ctaStyle === 'outline';
+  const btn = subBlock('button', {
+    label: v.ctaLabel,
+    href: v.ctaHref,
+    bgColor: outline ? '' : v.ctaColor,
+    color: outline ? v.ctaColor : v.ctaTextColor,
+    borderWidth: outline ? 2 : 0,
+    borderColor: v.ctaColor,
+    align,
+    padding: pad(0),
+  });
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="${align}" style="padding-top:18px;">${renderBlockInner(btn, design, ctx)}</td></tr></table>`;
 }
 
 function networkHref(item: SocialItem): string {
@@ -205,13 +303,323 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
       if (!v.html.trim()) return ctx.editor ? placeholder('Custom HTML — select this block to edit the code') : '';
       return v.html;
     }
+
+    /* ------------------------------------------------------------- header */
+    case 'header': {
+      const v: HeaderValues = block.values;
+      const bodyFont = body.fontFamily;
+
+      // the brand logo, or the brand name as text when there is no logo
+      const logo = imgTag(v.logoSrc, v.logoAlt || v.fallbackText, v.logoWidth);
+      const mark =
+        logo ||
+        textRun(v.fallbackText, {
+          fontFamily: v.fallbackFontFamily,
+          fontSize: v.fallbackFontSize,
+          color: v.fallbackColor,
+          weight: 'bold',
+          bodyFont,
+        }) ||
+        (ctx.editor ? placeholder('Header — add a logo URL or a brand name') : '');
+
+      const nav =
+        v.showNav && v.navLinks.length
+          ? renderBlockInner(
+              subBlock('menu', {
+                items: v.navLinks.map((l) => ({ id: l.id, label: l.label, href: l.href })),
+                layout: 'horizontal',
+                fontSize: v.navFontSize,
+                color: v.navColor,
+                fontFamily: v.navFontFamily,
+                separator: v.navSeparator,
+                itemPadding: 8,
+                align: v.layout === 'logo-center' ? 'center' : 'right',
+                padding: pad(0),
+              }),
+              design,
+              ctx,
+            )
+          : '';
+
+      const border =
+        v.borderWidth > 0
+          ? `border-bottom:${v.borderWidth}px solid ${cssVal(v.borderColor)};`
+          : '';
+      const navCls = v.hideNavOnMobile ? 'eb-hide-mobile' : 'eb-center-mobile';
+
+      const inner =
+        v.layout === 'logo-center'
+          ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center">${mark}</td></tr>${
+              nav ? `<tr><td align="center" class="${v.hideNavOnMobile ? 'eb-hide-mobile' : ''}" style="padding-top:14px;">${nav}</td></tr>` : ''
+            }</table>`
+          : colsTable([
+              col(mark, { align: 'left', classes: 'eb-center-mobile', valign: 'middle' }),
+              nav ? col(nav, { align: 'right', classes: navCls, valign: 'middle' }) : '',
+            ]);
+
+      return border
+        ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="${border}">${inner}</td></tr></table>`
+        : inner;
+    }
+
+    /* --------------------------------------------------------------- hero */
+    case 'hero': {
+      const v: HeroValues = block.values;
+      const bodyFont = body.fontFamily;
+      const centered = v.layout === 'centered';
+      const textAlign: Align = centered ? 'center' : 'left';
+
+      const copy = (align: Align) =>
+        textRun(v.eyebrow, {
+          fontFamily: v.headingFontFamily,
+          fontSize: 12,
+          color: v.eyebrowColor,
+          weight: 'bold',
+          align,
+          bodyFont,
+        }) +
+        textRun(v.heading, {
+          fontFamily: v.headingFontFamily,
+          fontSize: v.headingFontSize,
+          color: v.headingColor,
+          weight: v.headingFontWeight,
+          align,
+          lineHeight: 125,
+          bodyFont,
+          marginTop: v.eyebrow.trim() ? 8 : 0,
+        }) +
+        textRun(v.subtext, {
+          fontFamily: '',
+          fontSize: v.subtextFontSize,
+          color: v.subtextColor,
+          align,
+          lineHeight: 150,
+          bodyFont,
+          marginTop: 10,
+        });
+
+      if (v.layout === 'cards-2' || v.layout === 'cards-3') {
+        const want = v.layout === 'cards-2' ? 2 : 3;
+        const cards = v.cards.slice(0, want);
+        const inner = Math.max(
+          40,
+          ctx.colWidth - v.padding.left - v.padding.right - (want - 1) * 12,
+        );
+        const cw = Math.floor(inner / want);
+        const cells = cards.map((c, i) =>
+          col(
+            imgTag(c.imageSrc, c.imageAlt, cw) +
+              textRun(c.title, {
+                fontFamily: v.headingFontFamily,
+                fontSize: 17,
+                color: v.cardTitleColor,
+                weight: 'bold',
+                bodyFont,
+                marginTop: 12,
+              }) +
+              textRun(c.text, {
+                fontFamily: '',
+                fontSize: 14,
+                color: v.cardTextColor,
+                lineHeight: 150,
+                bodyFont,
+                marginTop: 6,
+              }) +
+              linkRun(c.linkLabel, c.linkHref, {
+                fontFamily: '',
+                fontSize: 14,
+                color: v.cardLinkColor,
+                bodyFont,
+                marginTop: 8,
+              }),
+            { width: cw, style: i < cards.length - 1 ? 'padding-right:12px;' : '' },
+          ),
+        );
+        const head = v.heading.trim() || v.eyebrow.trim()
+          ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="${textAlign}" style="padding-bottom:18px;">${copy(textAlign)}</td></tr></table>`
+          : '';
+        return head + colsTable(cells, v.align);
+      }
+
+      if (centered) {
+        const bgImg = safeUrl(v.bgImage);
+        // Outlook ignores background images, so bgColor is the fallback.
+        const bgAttr = bgImg ? ` background="${esc(bgImg)}"` : '';
+        const bgColor = v.bgColor ? ` bgcolor="${cssVal(v.bgColor)}"` : '';
+        const bgCss = v.bgColor ? `background-color:${cssVal(v.bgColor)};` : '';
+        // the shorthand first, then background-color, so the colour still wins
+        // as the Outlook fallback. Written as a shorthand rather than
+        // background-position so the export stays clean of any "position:".
+        const imgCss = bgImg ? `background:url('${esc(bgImg)}') center / cover no-repeat;` : '';
+        const art = imgTag(v.imageSrc, v.imageAlt, Math.max(40, ctx.colWidth - v.padding.left - v.padding.right), 'margin:0 auto;');
+        return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${bgAttr}${bgColor} align="center" style="${imgCss}${bgCss}padding:${bgImg || v.bgColor ? '28px 20px' : '0'};">${copy('center')}${ctaHtml(v, design, ctx, 'center')}${art ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding-top:20px;">${art}</td></tr></table>` : ''}</td></tr></table>`;
+      }
+
+      // image-left / image-right
+      const inner = Math.max(80, ctx.colWidth - v.padding.left - v.padding.right - 16);
+      const half = Math.floor(inner / 2);
+      const textCell = col(copy('left') + ctaHtml(v, design, ctx, 'left'), {
+        width: half,
+        classes: 'eb-center-mobile',
+        style: v.layout === 'image-right' ? 'padding-right:16px;' : 'padding-left:16px;',
+      });
+      const imageCell = col(imgTag(v.imageSrc, v.imageAlt, half), { width: half });
+      return colsTable(
+        v.layout === 'image-right' ? [textCell, imageCell] : [imageCell, textCell],
+        v.align,
+      );
+    }
+
+    /* ---------------------------------------------------------- articles */
+    case 'articles': {
+      const v: ArticleListValues = block.values;
+      const bodyFont = body.fontFamily;
+      const avail = Math.max(80, ctx.colWidth - v.padding.left - v.padding.right);
+      const items = v.items.slice(0, 10);
+
+      const textFor = (it: ArticleListValues['items'][number], align: Align = 'left') =>
+        textRun(it.title, {
+          fontFamily: v.titleFontFamily,
+          fontSize: v.titleFontSize,
+          color: v.titleColor,
+          weight: v.titleFontWeight,
+          align,
+          lineHeight: 130,
+          bodyFont,
+        }) +
+        textRun(it.excerpt, {
+          fontFamily: '',
+          fontSize: v.excerptFontSize,
+          color: v.excerptColor,
+          align,
+          lineHeight: 150,
+          bodyFont,
+          marginTop: 6,
+        }) +
+        linkRun(it.readMoreLabel, it.readMoreHref, {
+          fontFamily: '',
+          fontSize: v.excerptFontSize,
+          color: v.linkColor,
+          align,
+          bodyFont,
+          marginTop: 8,
+        });
+
+      const rendered = items.map((it) => {
+        if (v.layout === 'text-only') return textFor(it);
+        if (v.layout === 'thumb-top') {
+          const art = imgTag(it.imageSrc, it.imageAlt, avail);
+          return (art
+            ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding-bottom:12px;">${art}</td></tr></table>`
+            : '') + textFor(it);
+        }
+        // thumb-left: two cells, stacked on mobile by .eb-col
+        const tw = Math.min(v.thumbWidth, avail - 80);
+        const art = imgTag(it.imageSrc, it.imageAlt, tw);
+        return colsTable([
+          col(art, { width: tw, style: 'padding-right:16px;' }),
+          col(textFor(it)),
+        ]);
+      });
+
+      const joined = v.showDivider
+        ? rendered.join(ruleRow(v.dividerColor, Math.round(v.itemSpacing / 2)))
+        : rendered
+            .map((h, i) => (i === 0 ? h : `<div style="height:${v.itemSpacing}px;line-height:${v.itemSpacing}px;font-size:0;">&nbsp;</div>${h}`))
+            .join('');
+
+      if (!items.length) {
+        return ctx.editor ? placeholder('Article list — select this block and add items') : '';
+      }
+      return joined;
+    }
+
+    /* ------------------------------------------------------------- footer */
+    case 'footer': {
+      const v: FooterValues = block.values;
+      const bodyFont = body.fontFamily;
+      const align: Align = v.align;
+
+      const logo = imgTag(
+        v.logoSrc,
+        v.logoAlt || 'Logo',
+        v.logoWidth,
+        align === 'center' ? 'margin:0 auto;' : align === 'right' ? 'margin:0 0 0 auto;' : '',
+      );
+
+      const social =
+        v.showSocial && v.socialItems.length
+          ? renderBlockInner(
+              subBlock('social', {
+                items: v.socialItems,
+                size: v.socialSize,
+                colorMode: v.socialColorMode,
+                monoColor: v.socialMonoColor,
+                align,
+                padding: pad(0),
+              }),
+              design,
+              ctx,
+            )
+          : '';
+
+      const line = (text: string, marginTop: number) =>
+        textRun(text, {
+          fontFamily: v.fontFamily,
+          fontSize: v.fontSize,
+          color: v.textColor,
+          align,
+          lineHeight: 150,
+          bodyFont,
+          marginTop,
+        });
+
+      // the unsubscribe href is usually a merge tag, which safeUrl() preserves
+      const unsub = linkRun(v.unsubscribeText, v.unsubscribeHref, {
+        fontFamily: v.fontFamily,
+        fontSize: v.fontSize,
+        color: v.linkColor,
+        align,
+        bodyFont,
+        marginTop: 12,
+      });
+
+      const border =
+        v.borderWidth > 0 ? `border-top:${v.borderWidth}px solid ${cssVal(v.borderColor)};` : '';
+
+      const rows = [
+        logo ? `<tr><td align="${align}" style="padding-bottom:16px;">${logo}</td></tr>` : '',
+        social ? `<tr><td align="${align}" style="padding-bottom:14px;">${social}</td></tr>` : '',
+        `<tr><td align="${align}">${line(v.address, 0)}${line(v.legalText, 8)}${unsub}</td></tr>`,
+      ].join('');
+
+      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="${border}${border ? 'padding-top:20px;' : ''}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table></td></tr></table>`;
+    }
   }
 }
 
+/**
+ * Render one block's inner HTML through its own renderer. Composite blocks use
+ * this to reuse the Menu / Social / Button markup instead of duplicating it.
+ */
+export function renderInlineBlock(block: Block, design: Design, ctx: RenderCtx): string {
+  return renderBlockInner(block, design, ctx);
+}
+
+/** Composite blocks paint their own background behind the block padding. */
+const SELF_BG: ReadonlySet<string> = new Set(['header', 'hero', 'footer', 'articles']);
+
 export function renderBlock(block: Block, design: Design, ctx: RenderCtx): string {
+  // The email-level "Show footer" switch hides footer blocks from preview and
+  // export. The editor still draws them, dimmed, so they stay selectable.
+  if (block.type === 'footer' && !design.body.showFooter && !ctx.editor) return '';
+
   const inner = renderBlockInner(block, design, ctx);
   const align = 'align' in block.values ? block.values.align : 'left';
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="eb-block"><tr><td align="${align}" style="${padCss(block.values.padding)}">${inner}</td></tr></table>`;
+  const bg = SELF_BG.has(block.type) ? (block.values as { bgColor: string }).bgColor : '';
+  const bgAttr = bg ? ` bgcolor="${cssVal(bg)}"` : '';
+  const bgCss = bg ? `background-color:${cssVal(bg)};` : '';
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="eb-block"${bgAttr}><tr><td align="${align}" style="${bgCss}${padCss(block.values.padding)}">${inner}</td></tr></table>`;
 }
 
 export function renderRow(row: Row, design: Design): string {
@@ -266,6 +674,8 @@ export function renderDesign(design: Design): string {
   @media only screen and (max-width:${W}px){
     .eb-container{width:100% !important;max-width:100% !important;}
     .eb-col{display:block !important;width:100% !important;max-width:100% !important;}
+    .eb-center-mobile{text-align:center !important;}
+    .eb-hide-mobile{display:none !important;}
     .eb-img{height:auto !important;}
   }
 </style>

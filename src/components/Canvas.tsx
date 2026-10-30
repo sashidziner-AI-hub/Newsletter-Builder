@@ -1,12 +1,14 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import DOMPurify from 'dompurify';
 import { Copy, GripVertical, Trash2 } from 'lucide-react';
 import type { Block, BodySettings, Column, Design, Device, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
+import { resolvedDesign } from '../lib/output';
 import { columnWidths, renderBlock } from '../lib/render';
-import { useEditor } from '../store';
+import { useActiveBrand, useEditor, useSampleData } from '../store';
 import { DropLine, useDropHint } from './dnd';
+import { DELETE_BLOCK, DELETE_ROW, useConfirm } from './ConfirmDialog';
 
 const MOBILE_WIDTH = 375;
 
@@ -33,7 +35,19 @@ const BlockView = memo(function BlockView({
   const select = useEditor((s) => s.select);
   const duplicateBlock = useEditor((s) => s.duplicateBlock);
   const deleteBlock = useEditor((s) => s.deleteBlock);
+  const confirm = useConfirm();
   const hint = useDropHint();
+
+  const node = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * A block selected from the Checks drawer can be far off-screen. `nearest`
+   * does nothing when the block is already fully visible, so clicking a block
+   * in the canvas never jolts the page.
+   */
+  useEffect(() => {
+    if (selected) node.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [selected]);
 
   const drag = useDraggable({ id: `b:${block.id}`, data: { kind: 'block', blockId: block.id } });
   const drop = useDroppable({ id: block.id, data: { kind: 'block', blockId: block.id, columnId: column.id } });
@@ -42,7 +56,7 @@ const BlockView = memo(function BlockView({
   const html = useMemo(
     () =>
       sanitize(
-        renderBlock(block, { version: 1, body, rows: [] }, { colWidth, editor: true }),
+        renderBlock(block, { version: 1, brandId: null, body, rows: [] }, { colWidth, editor: true }),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [block, colWidth, body.fontFamily, body.linkColor, body.textColor],
@@ -50,12 +64,16 @@ const BlockView = memo(function BlockView({
 
   const label = BLOCK_META.find((m) => m.type === block.type)?.label ?? block.type;
   const showLineBefore = hint?.type === 'block' && hint.columnId === column.id && hint.index === index;
+  // "Show footer" off: keep it visible but obviously excluded, so it is still
+  // selectable and deletable. Preview and export leave it out entirely.
+  const hiddenOnSend = block.type === 'footer' && !body.showFooter;
 
   return (
     <div
-      ref={(node) => {
-        drag.setNodeRef(node);
-        drop.setNodeRef(node);
+      ref={(el) => {
+        node.current = el;
+        drag.setNodeRef(el);
+        drop.setNodeRef(el);
       }}
       {...drag.attributes}
       {...drag.listeners}
@@ -70,7 +88,15 @@ const BlockView = memo(function BlockView({
       } ${drag.isDragging ? 'opacity-30' : ''}`}
     >
       {showLineBefore && <DropLine className="-top-[2px]" />}
-      <div className="eb-canvas-content pointer-events-none" dangerouslySetInnerHTML={{ __html: html }} />
+      <div
+        className={`eb-canvas-content pointer-events-none ${hiddenOnSend ? 'opacity-40' : ''}`}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {hiddenOnSend && (
+        <span className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow">
+          Hidden on send
+        </span>
+      )}
       {selected && (
         <div className="absolute -top-7 right-0 z-20 flex items-center gap-0.5 rounded-md bg-brand-600 p-0.5 text-white shadow-md">
           <span className="flex items-center gap-1 px-1.5 text-[11px] font-medium">
@@ -97,7 +123,7 @@ const BlockView = memo(function BlockView({
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              deleteBlock(block.id);
+              confirm(DELETE_BLOCK, () => deleteBlock(block.id));
             }}
           >
             <Trash2 size={13} />
@@ -188,6 +214,7 @@ function RowView({
   const select = useEditor((s) => s.select);
   const duplicateRow = useEditor((s) => s.duplicateRow);
   const deleteRow = useEditor((s) => s.deleteRow);
+  const confirm = useConfirm();
   const hint = useDropHint();
 
   const drop = useDroppable({ id: row.id, data: { kind: 'row', rowId: row.id } });
@@ -276,7 +303,7 @@ function RowView({
             className="rounded p-1 hover:bg-white/20"
             onClick={(e) => {
               e.stopPropagation();
-              deleteRow(row.id);
+              confirm(DELETE_ROW, () => deleteRow(row.id));
             }}
           >
             <Trash2 size={13} />
@@ -312,11 +339,21 @@ function EndZone({ empty }: { empty: boolean }) {
 }
 
 export function Canvas() {
-  const design = useEditor((s) => s.design);
+  const raw = useEditor((s) => s.design);
+  const brand = useActiveBrand();
+  const sampleData = useSampleData();
   const device = useEditor((s) => s.device);
   const selection = useEditor((s) => s.selection);
   const select = useEditor((s) => s.select);
   const selectedBlockId = selection.kind === 'block' ? selection.id : null;
+
+  // The canvas renders a resolved copy, so switching brands re-themes it live.
+  // 'preview' mode may use uploaded logos and never applies UTM; with the sample
+  // data toggle on, merge tags show their sample values instead.
+  const design = useMemo(
+    () => resolvedDesign(raw, brand, 'preview', { sampleData }),
+    [raw, brand, sampleData],
+  );
 
   return (
     <main

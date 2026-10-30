@@ -16,7 +16,11 @@ export type BlockType =
   | 'menu'
   | 'social'
   | 'video'
-  | 'html';
+  | 'html'
+  | 'header'
+  | 'hero'
+  | 'footer'
+  | 'articles';
 
 export interface HeadingValues {
   text: string;
@@ -44,6 +48,8 @@ export interface ImageValues {
   src: string;
   alt: string;
   href: string;
+  /** exclude this link from UTM tagging */
+  noTrack?: boolean;
   width: number; // percent of the available width
   align: Align;
   borderRadius: number;
@@ -53,6 +59,7 @@ export interface ImageValues {
 export interface ButtonValues {
   label: string;
   href: string;
+  noTrack?: boolean;
   bgColor: string;
   color: string;
   fontSize: number;
@@ -81,6 +88,7 @@ export interface MenuItem {
   id: string;
   label: string;
   href: string;
+  noTrack?: boolean;
 }
 
 export interface MenuValues {
@@ -114,6 +122,7 @@ export interface SocialItem {
   network: SocialNetwork;
   href: string;
   iconUrl: string; // optional custom hosted PNG
+  noTrack?: boolean;
 }
 
 export interface SocialValues {
@@ -129,6 +138,7 @@ export interface SocialValues {
 
 export interface VideoValues {
   url: string;
+  noTrack?: boolean;
   thumbnail: string; // optional override (needed for Vimeo)
   alt: string;
   width: number;
@@ -145,6 +155,145 @@ export interface HtmlValues {
   padding: Padding;
 }
 
+/* ------------------------------------------------- composite blocks (1B) */
+
+export interface NavLink {
+  id: string;
+  label: string;
+  href: string;
+  noTrack?: boolean;
+}
+
+export interface HeaderValues {
+  layout: 'logo-left' | 'logo-center';
+  /** 'brand.logo' by default; a literal https URL overrides it */
+  logoSrc: string;
+  logoAlt: string;
+  logoWidth: number;
+  /** shown when the logo resolves to nothing — 'brand.name' by default */
+  fallbackText: string;
+  fallbackColor: string;
+  fallbackFontSize: number;
+  fallbackFontFamily: string;
+  showNav: boolean;
+  navLinks: NavLink[];
+  navColor: string;
+  navFontSize: number;
+  navFontFamily: string;
+  navSeparator: string;
+  hideNavOnMobile: boolean;
+  bgColor: string;
+  /** also writes bgColor to the parent row, the only way to go edge-to-edge */
+  fullWidthBg: boolean;
+  borderColor: string;
+  borderWidth: number;
+  align: Align;
+  padding: Padding;
+}
+
+export interface HeroCard {
+  id: string;
+  imageSrc: string;
+  imageAlt: string;
+  title: string;
+  text: string;
+  linkLabel: string;
+  linkHref: string;
+  noTrack?: boolean;
+}
+
+export interface HeroValues {
+  layout: 'image-right' | 'image-left' | 'centered' | 'cards-2' | 'cards-3';
+  eyebrow: string;
+  eyebrowColor: string;
+  heading: string;
+  headingFontSize: number;
+  headingFontWeight: 'normal' | 'bold';
+  headingFontFamily: string;
+  headingColor: string;
+  subtext: string;
+  subtextColor: string;
+  subtextFontSize: number;
+  imageSrc: string;
+  imageAlt: string;
+  ctaLabel: string;
+  ctaHref: string;
+  ctaNoTrack?: boolean;
+  ctaStyle: 'filled' | 'outline';
+  ctaColor: string;
+  ctaTextColor: string;
+  cards: HeroCard[];
+  cardTitleColor: string;
+  cardTextColor: string;
+  cardLinkColor: string;
+  bgColor: string;
+  /** centered layout only; Outlook falls back to bgColor */
+  bgImage: string;
+  align: Align;
+  padding: Padding;
+}
+
+export interface FooterValues {
+  /** 'brand.logo' by default; '' hides it */
+  logoSrc: string;
+  logoAlt: string;
+  logoWidth: number;
+  /** these default to brand.footer.* tokens; a literal string overrides */
+  address: string;
+  legalText: string;
+  unsubscribeText: string;
+  /** merge tag by default, passed through to the export untouched */
+  unsubscribeHref: string;
+  showSocial: boolean;
+  /** when true, resolveDesign() fills socialItems from the active brand */
+  useBrandSocial: boolean;
+  socialItems: SocialItem[];
+  socialSize: number;
+  socialColorMode: 'brand' | 'mono';
+  socialMonoColor: string;
+  textColor: string;
+  linkColor: string;
+  fontSize: number;
+  fontFamily: string;
+  bgColor: string;
+  fullWidthBg: boolean;
+  borderColor: string;
+  borderWidth: number;
+  align: Align;
+  padding: Padding;
+}
+
+export interface ArticleItem {
+  id: string;
+  imageSrc: string;
+  imageAlt: string;
+  title: string;
+  excerpt: string;
+  readMoreLabel: string;
+  readMoreHref: string;
+  noTrack?: boolean;
+}
+
+export interface ArticleListValues {
+  layout: 'thumb-left' | 'thumb-top' | 'text-only';
+  items: ArticleItem[];
+  /** px width of the thumbnail column in thumb-left */
+  thumbWidth: number;
+  showDivider: boolean;
+  dividerColor: string;
+  titleFontSize: number;
+  titleFontWeight: 'normal' | 'bold';
+  titleFontFamily: string;
+  titleColor: string;
+  excerptColor: string;
+  excerptFontSize: number;
+  linkColor: string;
+  itemSpacing: number;
+  bgColor: string;
+  align: Align;
+  padding: Padding;
+}
+
 export type Block =
   | { id: string; type: 'heading'; values: HeadingValues }
   | { id: string; type: 'text'; values: TextValues }
@@ -154,7 +303,11 @@ export type Block =
   | { id: string; type: 'menu'; values: MenuValues }
   | { id: string; type: 'social'; values: SocialValues }
   | { id: string; type: 'video'; values: VideoValues }
-  | { id: string; type: 'html'; values: HtmlValues };
+  | { id: string; type: 'html'; values: HtmlValues }
+  | { id: string; type: 'header'; values: HeaderValues }
+  | { id: string; type: 'hero'; values: HeroValues }
+  | { id: string; type: 'footer'; values: FooterValues }
+  | { id: string; type: 'articles'; values: ArticleListValues };
 
 export interface Column {
   id: string;
@@ -171,6 +324,29 @@ export interface Row {
   columns: Column[];
 }
 
+/* --------------------------------------------- merge tags + tracking (2A) */
+
+/**
+ * Designs always store merge tags in the canonical `{{tag}}` form. The chosen
+ * format is applied at the export boundary, so switching ESP never rewrites
+ * stored content.
+ */
+export type MergeFormat = 'curly' | 'mailchimp' | 'hubspot' | 'custom';
+
+export interface MergeCustomFormat {
+  prefix: string;
+  suffix: string;
+}
+
+export interface UtmSettings {
+  enabled: boolean;
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  term: string;
+}
+
 export interface BodySettings {
   bgColor: string;
   contentBgColor: string;
@@ -180,10 +356,19 @@ export interface BodySettings {
   linkColor: string;
   preheader: string;
   title: string;
+  /** when false, footer blocks are skipped in preview and export */
+  showFooter: boolean;
+  /** how canonical {{tag}} values are written in the export */
+  mergeFormat: MergeFormat;
+  mergeCustom: MergeCustomFormat;
+  /** UTM parameters, applied to http(s) links at export time only */
+  utm: UtmSettings;
 }
 
 export interface Design {
   version: 1;
+  /** null (or an unknown/archived id) falls back to the default brand */
+  brandId: string | null;
   body: BodySettings;
   rows: Row[];
 }
@@ -194,3 +379,79 @@ export type Selection =
   | { kind: 'block'; id: string };
 
 export type Device = 'desktop' | 'mobile';
+
+/* ---------------------------------------------------------------- brand kit */
+
+/**
+ * A brand token is a string of the form `brand.<path>` stored in place of a hex
+ * colour or a font stack. Tokens are resolved to literal values by
+ * `resolveDesign()` just before rendering, so a design can be re-themed by
+ * swapping `Design.brandId` without rewriting any block. Values that are not
+ * tokens (plain hex, a font stack, a URL) are manual overrides and are left
+ * untouched by a brand switch.
+ */
+export interface BrandColors {
+  primary: string;
+  secondary: string;
+  accent: string;
+  text: string;
+  muted: string;
+  link: string;
+  page_bg: string;
+  content_bg: string;
+  border: string;
+}
+
+export interface BrandFonts {
+  heading: string;
+  body: string;
+}
+
+export interface BrandButton {
+  radius: number;
+  /** inner padding, vertical / horizontal, in px */
+  paddingV: number;
+  paddingH: number;
+  weight: 'normal' | 'bold';
+  uppercase: boolean;
+}
+
+export interface BrandTokens {
+  colors: BrandColors;
+  fonts: BrandFonts;
+  button: BrandButton;
+}
+
+export interface BrandFooter {
+  address: string;
+  legal_text: string;
+  unsubscribe_text: string;
+}
+
+export interface BrandSocialLink {
+  id: string;
+  network: SocialNetwork;
+  url: string;
+}
+
+export interface Brand {
+  id: string;
+  name: string;
+  slug: string;
+  /** downscaled upload, canvas preview only — never used in exported HTML */
+  logo: string;
+  logo_dark: string;
+  /** absolute https URL — this is what the exported HTML uses */
+  logo_url: string;
+  logo_dark_url: string;
+  website_url: string;
+  tokens: BrandTokens;
+  footer: BrandFooter;
+  social_links: BrandSocialLink[];
+  is_active: boolean;
+  createdAt: number;
+  updatedAt: number;
+  /** nullable today; becomes a user reference when accounts exist */
+  createdBy: string | null;
+  updatedBy: string | null;
+}
