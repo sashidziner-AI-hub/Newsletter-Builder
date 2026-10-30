@@ -8,9 +8,10 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import type { Brand, BrandColors, BrandSocialLink, SocialNetwork } from '../types';
+import type { Brand, BrandColors, BrandDarkColors, BrandSocialLink, SocialNetwork } from '../types';
 import { canEditBrand, emptyBrand, normalizeBrand } from '../lib/brand';
 import { FONT_STACKS, SOCIAL_NETWORKS } from '../lib/defaults';
+import { darkColors, deriveDarkColors, paletteReadable } from '../lib/dark';
 import { readLogoFile } from '../lib/image';
 import { downloadFile, slugify, uid } from '../lib/util';
 import { useAccessibleBrands, useEditor } from '../store';
@@ -31,6 +32,17 @@ const primaryBtn =
   'inline-flex items-center gap-1.5 rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50';
 const ghostBtn =
   'inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50';
+
+const DARK_FIELDS: { key: keyof BrandDarkColors; label: string }[] = [
+  { key: 'page_bg', label: 'Page background' },
+  { key: 'content_bg', label: 'Content background' },
+  { key: 'text', label: 'Text' },
+  { key: 'muted', label: 'Muted text' },
+  { key: 'link', label: 'Link' },
+  { key: 'border', label: 'Border' },
+  { key: 'button_bg', label: 'Button background' },
+  { key: 'button_text', label: 'Button text' },
+];
 
 const COLOR_FIELDS: { key: keyof BrandColors; label: string }[] = [
   { key: 'primary', label: 'Primary' },
@@ -215,6 +227,13 @@ function BrandForm({
     onChange({ ...value, footer: { ...value.footer, ...patch } });
   const setLinks = (social_links: BrandSocialLink[]) => onChange({ ...value, social_links });
 
+  // what dark mode actually uses: the brand's own palette where it has one, the
+  // derived one everywhere else, key by key
+  const dark = darkColors(value);
+  const setDark = (key: keyof BrandDarkColors, v: string) =>
+    onChange({ ...value, darkTokens: { ...dark, ...value.darkTokens, [key]: v } });
+  const readable = paletteReadable(dark);
+
   return (
     <>
       <Section title="Identity">
@@ -261,6 +280,74 @@ function BrandForm({
             onChange={(v) => setColor(f.key, v)}
           />
         ))}
+      </Section>
+
+      <Section title="Dark mode" defaultOpen={false}>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            onClick={() => onChange({ ...value, darkTokens: deriveDarkColors(value.tokens.colors) })}
+          >
+            Derive from light
+          </button>
+          {value.darkTokens && (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+              onClick={() => onChange({ ...value, darkTokens: null })}
+            >
+              Reset to derived
+            </button>
+          )}
+        </div>
+
+        {/* the sample is painted with the palette itself, so it cannot drift */}
+        <div
+          className="rounded-lg border p-3"
+          style={{ background: dark.page_bg, borderColor: dark.border }}
+        >
+          <div className="rounded-md p-3" style={{ background: dark.content_bg }}>
+            <p className="text-sm font-semibold" style={{ color: dark.text }}>
+              {value.name || 'Your brand'} in dark mode
+            </p>
+            <p className="mt-1 text-xs" style={{ color: dark.muted }}>
+              Body copy sits on the content panel, and{' '}
+              <span style={{ color: dark.link, textDecoration: 'underline' }}>a link looks like this</span>.
+            </p>
+            <span
+              className="mt-2 inline-block rounded px-3 py-1.5 text-xs font-semibold"
+              style={{ background: dark.button_bg, color: dark.button_text }}
+            >
+              Call to action
+            </span>
+          </div>
+        </div>
+
+        <p
+          className={`text-[11px] leading-snug ${readable.ok ? 'text-slate-400' : 'text-amber-700'}`}
+        >
+          {readable.ok
+            ? `Text ${readable.text}:1 and links ${readable.link}:1 on the content background — both clear WCAG AA.`
+            : `Text ${readable.text}:1 and links ${readable.link}:1 on the content background. AA wants 4.5:1 for both.`}
+        </p>
+
+        {DARK_FIELDS.map((f) => (
+          <ColorField
+            key={f.key}
+            noBrand
+            label={f.label}
+            allowEmpty
+            emptyLabel="derived"
+            value={value.darkTokens?.[f.key] ?? ''}
+            onChange={(v) => setDark(f.key, v)}
+          />
+        ))}
+        <p className="text-[11px] leading-snug text-slate-400">
+          Leave a field empty and it is derived from the light palette. Emails using this brand
+          pick these up wherever a colour came from a brand token; a hex typed by hand on a block
+          stays as it is unless that block has its own dark override.
+        </p>
       </Section>
 
       <Section title="Fonts">

@@ -34,6 +34,15 @@ export interface CheckOptions {
   loadStatus?: Map<string, 'ok' | 'broken'>;
   /** natural widths, from the image library */
   imageWidths?: Map<string, number>;
+  /**
+   * 3B: the same design resolved against the brand's dark palette. Present
+   * only when dark support is on, and when it is the contrast rules run a
+   * second time over it — an email can be perfectly readable in light mode and
+   * unreadable in dark.
+   */
+  darkDesign?: Design;
+  /** how many bytes the dark machinery added to the exported HTML */
+  darkOverheadBytes?: number;
 }
 
 const KB = 1024;
@@ -46,6 +55,8 @@ export const SUBJECT_MAX = 60;
 export const PREHEADER_MAX = 110;
 /** below this many words, an email reads as image-only to a spam filter */
 export const THIN_CONTENT_WORDS = 20;
+/** Dark mode should be a stylesheet, not a second email. */
+export const DARK_OVERHEAD_WARN_KB = 3;
 
 const PLACEHOLDER_DOMAINS = [
   'example.com',
@@ -302,7 +313,7 @@ export function classifyLink(url: string): LinkVerdict {
 export function checkDesign(
   design: Design,
   html: string,
-  _brand: Brand,
+  brand: Brand,
   opts: CheckOptions = {},
 ): Issue[] {
   const issues: Issue[] = [];
@@ -476,6 +487,96 @@ export function checkDesign(
       message: `The default link colour is ${round2(bodyLinkRatio)}:1 against the content background — AA needs 4.5:1.`,
       hint: fix ? `Try ${fix} in Email settings.` : 'Darken the link colour in Email settings.',
     });
+  }
+
+  /* ---- DARK MODE (3B) */
+  if (opts.darkDesign) {
+    const dark = opts.darkDesign;
+    const darkBody = dark.body;
+
+    for (const row of dark.rows) {
+      for (const col of row.columns) {
+        for (const block of col.blocks) {
+          const background = effectiveBackground(dark, row, block);
+          const overImage = hasBackgroundImage(block);
+
+          if (overImage) {
+            add({
+              id: id('DARK_IMAGE_MANUAL', block.id, 'bgImage'),
+              code: 'DARK_IMAGE_MANUAL',
+              severity: 'info',
+              message: 'This hero sits on a background image, which dark mode cannot restyle.',
+              hint: 'Check it by hand against a dark background, and make sure any text over it still reads.',
+              blockId: block.id,
+            });
+            continue;
+          }
+
+          for (const run of textRuns(block, darkBody)) {
+            const surface = run.onColor || background;
+            const ratio = contrastRatio(run.color, surface);
+            if (ratio === null || meetsAA(ratio, run.fontSize, run.bold)) continue;
+            const fix = suggestFix(run.color, surface, run.fontSize, run.bold);
+            const code = run.code === 'CONTRAST_BUTTON' ? 'CONTRAST_BUTTON_DARK' : 'CONTRAST_TEXT_DARK';
+            add({
+              id: id(code, block.id, run.label),
+              code,
+              severity: 'error',
+              message: `In dark mode, ${run.label.toLowerCase()} is ${round2(ratio)}:1 — WCAG AA needs ${requiredRatio(run.fontSize, run.bold)}:1.`,
+              hint: fix
+                ? `${run.color} on ${surface} is too close in dark mode. Set a dark override of ${fix} on this block, or adjust the brand's dark palette.`
+                : "Adjust this block's dark override, or the brand's dark palette.",
+              blockId: block.id,
+            });
+          }
+        }
+      }
+    }
+
+    const darkSurface = darkBody.contentBgColor || darkBody.bgColor || '#1E1E1E';
+    const darkLink = contrastRatio(darkBody.linkColor, darkSurface);
+    if (darkLink !== null && !meetsAA(darkLink, 15, false)) {
+      const fix = suggestFix(darkBody.linkColor, darkSurface, 15, false);
+      add({
+        id: id('CONTRAST_LINK_DARK', undefined, 'bodyLink'),
+        code: 'CONTRAST_LINK_DARK',
+        severity: 'error',
+        message: `In dark mode the default link colour is ${round2(darkLink)}:1 against the content background — AA needs 4.5:1.`,
+        hint: fix ? `Try ${fix} as the brand's dark link colour.` : "Lighten the brand's dark link colour.",
+      });
+    }
+
+    // a dark logo is the one thing the stylesheet cannot invent
+    const usesLogo = design.rows.some((row) =>
+      row.columns.some((col) =>
+        col.blocks.some(
+          (b) =>
+            (b.type === 'header' || b.type === 'footer') &&
+            typeof b.values.logoSrc === 'string' &&
+            b.values.logoSrc.trim() !== '',
+        ),
+      ),
+    );
+    if (usesLogo && !(brand.logo_dark_url || '').trim()) {
+      add({
+        id: id('DARK_NO_LOGO', undefined, brand.id),
+        code: 'DARK_NO_LOGO',
+        severity: 'info',
+        message: `${brand.name} has no dark logo, so the same one ships to both schemes.`,
+        hint: 'A dark logo on a dark background may disappear. Add a light version as the brand\'s dark logo URL.',
+      });
+    }
+
+    const overheadKb = (opts.darkOverheadBytes ?? 0) / KB;
+    if (overheadKb > DARK_OVERHEAD_WARN_KB) {
+      add({
+        id: id('SIZE_DARK_OVERHEAD', undefined, 'html'),
+        code: 'SIZE_DARK_OVERHEAD',
+        severity: 'warning',
+        message: `Dark mode support adds ${overheadKb.toFixed(1)} KB to this email.`,
+        hint: 'Most of that is per-block colour rules. Leaning on the brand palette instead of per-block overrides keeps it smaller.',
+      });
+    }
   }
 
   /* ---- LINKS */

@@ -10,10 +10,12 @@ import {
   History,
   Monitor,
   Palette,
+  Moon,
   Redo2,
   ShieldAlert,
   ShieldCheck,
   Smartphone,
+  Sun,
   Undo2,
   Upload,
 } from 'lucide-react';
@@ -170,6 +172,8 @@ export function TopBar({
 }) {
   const design = useEditor((s) => s.design);
   const device = useEditor((s) => s.device);
+  const scheme = useEditor((s) => s.scheme);
+  const setScheme = useEditor((s) => s.setScheme);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
   const { undo, redo, setDevice, updateBody, startNewEmail, setBrandId } = useEditor.getState();
@@ -283,6 +287,35 @@ export function TopBar({
               }`}
             >
               {d === 'desktop' ? <Monitor size={16} /> : <Smartphone size={16} />}
+            </button>
+          ))}
+        </div>
+        {/* the canvas is not an iframe, so it cannot host the dark stylesheet;
+            this drives the Preview window, which is the real exported HTML */}
+        <div
+          className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5"
+          title={
+            design.body.darkMode
+              ? 'Colour scheme for the Preview window'
+              : 'Dark mode support is off for this email'
+          }
+        >
+          {(['light', 'dark'] as const).map((sc) => (
+            <button
+              key={sc}
+              type="button"
+              disabled={!design.body.darkMode}
+              title={sc === 'light' ? 'Light preview' : 'Dark preview'}
+              aria-label={sc === 'light' ? 'Light preview' : 'Dark preview'}
+              aria-pressed={scheme === sc}
+              onClick={() => setScheme(sc)}
+              className={`rounded p-1.5 disabled:cursor-not-allowed disabled:opacity-40 ${
+                scheme === sc && design.body.darkMode
+                  ? 'bg-white text-brand-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {sc === 'light' ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           ))}
         </div>

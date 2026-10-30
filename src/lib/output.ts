@@ -3,6 +3,7 @@ import type { Block, Brand, Design } from '../types';
 import { resolveDesign, type ResolveMode } from './brand';
 import { applySampleData, formatMergeTags } from './merge';
 import { addUtm, countHtmlLinks, rewriteHtmlLinks, wouldTag } from './utm';
+import { type DarkCtx, darkBrand, darkColors, darkCtx, prepareDarkDesign } from './dark';
 
 /**
  * The export boundary.
@@ -169,4 +170,33 @@ export function resolvedDesign(
   opts: OutputOpts = {},
 ): Design {
   return resolveForOutput(design, brand, mode, opts).design;
+}
+
+/* ----------------------------------------------------------- dark mode (3B) */
+
+/**
+ * The same design resolved against the brand's dark palette.
+ *
+ * This is the whole of the dark decision: it composes the existing boundary
+ * with a brand whose colour tokens have been swapped, so a token-derived colour
+ * moves and a hand-typed hex does not. The renderer compares the two passes and
+ * only emits a class where they disagree.
+ */
+export function darkResolved(design: Design, brand: Brand): Design {
+  const dark = resolveForOutput(design, darkBrand(brand), 'export').design;
+  const lit = resolveForOutput(design, brand, 'export').design;
+  return prepareDarkDesign(structuredClone(dark), lit, brand);
+}
+
+/**
+ * What to hand `renderDesign()`. Empty when dark support is off, which is what
+ * keeps that export byte-identical to a pre-3B one.
+ */
+export function darkRenderOpts(
+  design: Design,
+  brand: Brand,
+  preview = false,
+): { dark?: DarkCtx } {
+  if (!design.body.darkMode) return {};
+  return { dark: darkCtx(darkResolved(design, brand), darkColors(brand), preview) };
 }

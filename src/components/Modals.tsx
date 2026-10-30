@@ -5,14 +5,16 @@ import {
   Copy,
   Download,
   Monitor,
+  Moon,
   ShieldAlert,
   Smartphone,
+  Sun,
   Trash2,
   X,
 } from 'lucide-react';
 import type { Device } from '../types';
 import { summarise } from '../lib/checks';
-import { resolveForOutput, resolvedDesign } from '../lib/output';
+import { darkRenderOpts, resolveForOutput, resolvedDesign } from '../lib/output';
 import { toPlainText } from '../lib/plaintext';
 import { renderDesign } from '../lib/render';
 import { downloadFile, slugify } from '../lib/util';
@@ -88,15 +90,53 @@ const ghostBtn =
 export function PreviewModal({ onClose }: { onClose: () => void }) {
   const design = useEditor((s) => s.design);
   const brand = useActiveBrand();
+  const scheme = useEditor((s) => s.scheme);
+  const setScheme = useEditor((s) => s.setScheme);
   const [device, setDevice] = useState<Device>('desktop');
+  const darkOn = design.body.darkMode;
+  const dark = scheme === 'dark' && darkOn;
+
   // the preview is the export, so it goes through the same boundary: brand
-  // tokens, UTM and merge-tag formatting all included
-  const html = useMemo(() => renderDesign(resolvedDesign(design, brand, 'export')), [design, brand]);
+  // tokens, UTM and merge-tag formatting all included. The dark preview is the
+  // same HTML with the same rules, forced on through an attribute rather than
+  // the media query — there is no second renderer.
+  const html = useMemo(
+    () =>
+      renderDesign(resolvedDesign(design, brand, 'export'), darkRenderOpts(design, brand, dark)),
+    [design, brand, dark],
+  );
 
   return (
     <Modal title="Preview" onClose={onClose} wide>
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-2">
-        <p className="text-xs text-slate-500">This is the exact HTML that will be exported.</p>
+        <p className="text-xs text-slate-500">
+          This is the exact HTML that will be exported.
+          {dark && (
+            <span className="ml-2 text-amber-700">
+              Gmail apps apply their own automatic colour inversion and ignore these rules. Apple
+              Mail, Outlook (Mac/iOS) and Outlook.com follow them.
+            </span>
+          )}
+        </p>
+        <div className="flex items-center gap-2">
+        {darkOn && (
+          <div className="flex rounded-md border border-slate-300 bg-white p-0.5">
+            {(['light', 'dark'] as const).map((sc) => (
+              <button
+                key={sc}
+                type="button"
+                aria-pressed={scheme === sc}
+                onClick={() => setScheme(sc)}
+                className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium ${
+                  scheme === sc ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {sc === 'light' ? <Sun size={14} /> : <Moon size={14} />}
+                {sc === 'light' ? 'Light' : 'Dark'}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex rounded-md border border-slate-300 bg-white p-0.5">
           {(['desktop', 'mobile'] as const).map((d) => (
             <button
@@ -112,8 +152,9 @@ export function PreviewModal({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </div>
+        </div>
       </div>
-      <div className="flex min-h-0 flex-1 justify-center overflow-auto bg-slate-200 p-4">
+      <div className={`flex min-h-0 flex-1 justify-center overflow-auto p-4 ${dark ? 'bg-slate-800' : 'bg-slate-200'}`}>
         <iframe
           title="Email preview"
           // no scripts; links may open in new tabs
@@ -135,7 +176,10 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
 
   // one boundary pass gives both outputs and the UTM counts
   const out = useMemo(() => resolveForOutput(design, brand, 'export'), [design, brand]);
-  const html = useMemo(() => renderDesign(out.design), [out]);
+  const html = useMemo(
+    () => renderDesign(out.design, darkRenderOpts(design, brand)),
+    [out, design, brand],
+  );
   const plain = useMemo(() => toPlainText(out.design), [out]);
 
   const body = tab === 'html' ? html : plain;

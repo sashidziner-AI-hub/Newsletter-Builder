@@ -468,6 +468,8 @@ export function ColorField({
   allowEmpty,
   emptyLabel = 'none',
   noBrand,
+  darkValue,
+  onDarkChange,
 }: {
   label: string;
   value: string;
@@ -476,22 +478,57 @@ export function ColorField({
   emptyLabel?: string;
   /** hide the brand swatch row (for colours a brand has no opinion about) */
   noBrand?: boolean;
+  /**
+   * 3B: when supplied, a Dark tab appears beside the picker. Empty means
+   * "follow the brand's dark palette", which is the default and is almost
+   * always what you want — an override is for the cases the palette cannot
+   * know about.
+   */
+  darkValue?: string;
+  onDarkChange?: (v: string) => void;
 }) {
   const brand = useActiveBrand();
-  const token = isBrandToken(value) ? value : '';
-  const resolved = token ? resolveToken(value, brand, 'preview') : value;
+  const [tab, setTab] = useState<'light' | 'dark'>('light');
+  const hasDark = !!onDarkChange;
+  const editingDark = hasDark && tab === 'dark';
+
+  const shown = editingDark ? darkValue ?? '' : value;
+  const commit = editingDark ? onDarkChange! : onChange;
+
+  const token = isBrandToken(shown) ? shown : '';
+  const resolved = token ? resolveToken(shown, brand, 'preview') : shown;
   const valid = HEX.test(resolved);
 
   return (
     <div>
-      <span className="mb-1 block text-xs font-medium text-slate-600">{label}</span>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="block text-xs font-medium text-slate-600">{label}</span>
+        {hasDark && (
+          <div className="ml-auto flex rounded border border-slate-200 bg-slate-50 p-px">
+            {(['light', 'dark'] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                aria-pressed={tab === t}
+                aria-label={`${label}: ${t} mode`}
+                onClick={() => setTab(t)}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                  tab === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                }`}
+              >
+                {t === 'light' ? 'Light' : 'Dark'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="flex items-center gap-2">
         <input
           type="color"
           aria-label={label}
           className="h-8 w-9 shrink-0 cursor-pointer rounded border border-slate-300 bg-white p-0.5"
           value={valid ? expandHex(resolved) : '#ffffff'}
-          onChange={(e) => onChange(e.target.value.toUpperCase())}
+          onChange={(e) => commit(e.target.value.toUpperCase())}
         />
         {token ? (
           <span className="flex min-w-0 flex-1 items-center gap-1 rounded-md border border-brand-200 bg-brand-50 px-2 py-1.5 text-xs font-medium text-brand-700">
@@ -502,7 +539,7 @@ export function ColorField({
               title="Replace with a fixed colour"
               aria-label={`Unlink ${label} from the brand`}
               className="shrink-0 rounded p-0.5 hover:bg-brand-100"
-              onClick={() => onChange(resolved || '#000000')}
+              onClick={() => commit(resolved || '#000000')}
             >
               <X size={12} />
             </button>
@@ -510,22 +547,30 @@ export function ColorField({
         ) : (
           <input
             className={inputCls}
-            value={value}
-            placeholder={allowEmpty ? emptyLabel : '#000000'}
-            onChange={(e) => onChange(e.target.value)}
+            value={shown}
+            placeholder={
+              editingDark ? 'follows the dark palette' : allowEmpty ? emptyLabel : '#000000'
+            }
+            onChange={(e) => commit(e.target.value)}
           />
         )}
-        {allowEmpty && value && (
+        {(editingDark || allowEmpty) && shown && (
           <button
             type="button"
             className="shrink-0 rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
-            onClick={() => onChange('')}
+            onClick={() => commit('')}
           >
             Clear
           </button>
         )}
       </div>
-      {!noBrand && (
+      {editingDark && (
+        <p className="mt-1 text-[11px] leading-snug text-slate-400">
+          Leave this empty unless dark mode gets it wrong — the brand's dark palette handles the
+          usual cases.
+        </p>
+      )}
+      {!noBrand && !editingDark && (
         <div className="mt-1.5">
           <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
             Brand colors
@@ -541,7 +586,7 @@ export function ColorField({
                   title={`${sw.label} · ${hex}`}
                   aria-label={`${label}: brand ${sw.label}`}
                   aria-pressed={active}
-                  onClick={() => onChange(`brand.${sw.key}`)}
+                  onClick={() => commit(`brand.${sw.key}`)}
                   className={`h-6 w-6 rounded border transition-transform hover:scale-110 ${
                     active ? 'border-brand-600 ring-2 ring-brand-500/40' : 'border-slate-300'
                   }`}

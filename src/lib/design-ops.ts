@@ -68,6 +68,9 @@ export function normalizeDesign(input: unknown): Design | null {
   const body = { ...defaultBody(), ...((raw.body as object) ?? {}) };
   // designs saved before 1B carry no showFooter; default it to on
   if (typeof body.showFooter !== 'boolean') body.showFooter = true;
+  // designs saved before 3B carry no darkMode; default it to on, so an email
+  // that predates the feature gains dark support rather than silently missing it
+  if (typeof body.darkMode !== 'boolean') body.darkMode = true;
   // 2A settings: a shallow spread cannot fill nested objects, so do it here
   const fresh = defaultBody();
   if (typeof body.mergeFormat !== 'string') body.mergeFormat = fresh.mergeFormat;
@@ -91,6 +94,8 @@ export function normalizeDesign(input: unknown): Design | null {
       padding: { ...base.padding, ...((r.padding as object) ?? {}) },
       columns: [],
     };
+    // 3B: an optional dark override, absent on everything saved before it
+    if (r.dark && typeof r.dark === 'object') row.dark = { ...(r.dark as object) };
     for (const c of r.columns as Record<string, unknown>[]) {
       const blocks: Block[] = [];
       const rawBlocks = c && Array.isArray(c.blocks) ? (c.blocks as Record<string, unknown>[]) : [];

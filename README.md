@@ -22,6 +22,7 @@ npm run build      # type-check + production build into dist/
 | Styling | Per-block colors, fonts (email-safe stacks), sizes, alignment, padding, border radius; global body width / colors / font / link color |
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
 | Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html` |
+| Dark mode | Per-brand dark palette (derived if you do not set one), a stylesheet plus both colour-scheme meta tags on export, Outlook.com's `[data-ogsc]`/`[data-ogsb]` selectors, light/dark logo swap, per-block and per-row dark overrides, and a Light/Dark preview. Off, and the export is byte-identical to one without the feature |
 | Checks | A live quality panel: size against Gmail's ~102 KB clip, dead and insecure links, missing unsubscribe, empty or over-long subject and preheader, WCAG AA contrast with the ratio and a suggested fix, text under 12px, buttons too small to tap, image-only content and every image rule. Badge in the top bar, drawer with **Go to block** and per-email **Ignore**. Never blocks editing or export |
 | Sending prep | Merge tags with per-ESP formats (double curly, Mailchimp, HubSpot, custom), UTM link tagger with per-link opt-out, and a plain-text version alongside the HTML |
 | Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, named templates |
@@ -57,6 +58,7 @@ src/
   lib/audit.ts          placeholder-art host list
   lib/checks.ts         the quality engine: resolved design + exported HTML -> Issue[]
   lib/contrast.ts       WCAG 2.1 contrast maths (pure)
+  lib/dark.ts           dark palette, class minting, the dark stylesheet
   components/           canvas (dnd-kit), panels, property editors, TipTap rich text, modals
   test/                 renderer, store, drop-targeting and UI tests
 ```
@@ -103,6 +105,34 @@ the detail to the drawer; Copy and Download stay live with errors outstanding.
 **Ignore** is per issue and per email, and survives reopening it. Presets will legitimately
 raise warnings — their links are `https://example.com` and their art is placeholder — which is
 what Ignore is for, until the real content goes in.
+
+## Dark mode
+
+**Email settings → Dark mode support** (on by default). With it on the export carries
+`color-scheme` and `supported-color-schemes` meta tags and one `<style>` block, whose rules
+are written three times over: in `@media (prefers-color-scheme: dark)`, behind Outlook.com's
+`[data-ogsc]`/`[data-ogsb]`, and — in the preview only — behind an attribute so the Preview
+window can force them.
+
+Colours follow the **active brand's dark palette** (Brands → Dark mode, with a *Derive from
+light* button and a live sample). What moves and what does not is decided by where the colour
+came from:
+
+- a colour taken from a brand swatch follows the dark palette
+- a hex you typed by hand stays exactly as it is
+- a **Dark** tab beside a block's or row's colour picker overrides both
+
+If the brand has a **dark logo URL**, both logos ship and the stylesheet swaps them; with no
+dark logo the single logo is used and the Checks panel says so.
+
+The **Light / Dark** toggle sits beside Desktop/Mobile and drives the Preview window — the
+canvas is not an iframe, so it cannot host the stylesheet.
+
+**Gmail's apps ignore all of this** and apply their own colour inversion. Apple Mail, Outlook
+for Mac/iOS and Outlook.com follow the rules. Test in both kinds.
+
+With the toggle off, the exported HTML is byte-identical to what this app produced before
+dark mode existed — no meta tags, no stylesheet, no class names.
 
 ## Saving, history and saved blocks
 
@@ -237,6 +267,12 @@ Vee Technologies brand.
 - **Contrast is computed from the colours in the design.** Text over a background image is reported
   as unknown rather than guessed at, and a client that forces dark mode is beyond it.
 - **Ignored checks are per email and per browser**, stored alongside the email.
+- **Dark mode cannot reach Gmail's apps**, which invert colours themselves, nor background
+  images and text sitting on them — the Checks panel raises an info note for those.
+- **The canvas is always light.** Use the Preview window to see dark mode.
+- **Brand colours are mapped to dark by role** (`secondary` as strong text, `primary` as the
+  call-to-action fill, and so on). A brand that uses one of them a different way wants a
+  per-block dark override; the dark contrast check will tell you which block.
 - **Brand footers and social links** feed the Footer block, which pulls them from the active brand
   with a per-email override. Nothing auto-inserts a Footer block into a new email yet.
 - **Outlook on Windows ignores background images**, so the Hero's centered background image falls

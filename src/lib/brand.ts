@@ -1,5 +1,5 @@
 import { produce } from 'immer';
-import type { Brand, BrandSocialLink, Design, SocialNetwork } from '../types';
+import type { Brand, BrandDarkColors, BrandSocialLink, Design, SocialNetwork } from '../types';
 import { KANIT_STACK, SOCIAL_NETWORKS } from './defaults';
 import { slugify, uid } from './util';
 
@@ -7,6 +7,13 @@ import { slugify, uid } from './util';
 export type ResolveMode = 'preview' | 'export';
 
 export const TOKEN_PREFIX = 'brand.';
+
+/**
+ * Stamped on brands this module writes. A brand saved before 3B has no
+ * `darkTokens` and no version; it reads as version 1 and derives its dark
+ * palette, so an existing kit keeps working untouched.
+ */
+export const BRAND_SCHEMA_VERSION = 2;
 
 export function isBrandToken(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith(TOKEN_PREFIX);
@@ -54,6 +61,9 @@ export function veeBrand(): Brand {
     updatedAt: now,
     createdBy: null,
     updatedBy: null,
+    // null means "derive one"; see lib/dark.ts
+    darkTokens: null,
+    schemaVersion: BRAND_SCHEMA_VERSION,
   };
 }
 
@@ -80,6 +90,8 @@ export function emptyBrand(name = ''): Brand {
     },
     footer: { address: '', legal_text: '', unsubscribe_text: 'Unsubscribe' },
     social_links: [],
+    darkTokens: null,
+    schemaVersion: BRAND_SCHEMA_VERSION,
     createdAt: now,
     updatedAt: now,
   };
@@ -257,6 +269,23 @@ export function normalizeBrand(input: unknown): Brand | null {
   const colors = { ...base.tokens.colors };
   for (const k of COLOR_KEYS) colors[k] = str(rawColors[k], colors[k]);
 
+  // absent on every brand saved before 3B, which is the normal case
+  const rawDark = raw.darkTokens;
+  let darkTokens: BrandDarkColors | null = null;
+  if (rawDark && typeof rawDark === 'object') {
+    const d = rawDark as Record<string, unknown>;
+    darkTokens = {
+      page_bg: str(d.page_bg),
+      content_bg: str(d.content_bg),
+      text: str(d.text),
+      muted: str(d.muted),
+      link: str(d.link),
+      border: str(d.border),
+      button_bg: str(d.button_bg),
+      button_text: str(d.button_text),
+    };
+  }
+
   const social: BrandSocialLink[] = [];
   if (Array.isArray(raw.social_links)) {
     for (const item of raw.social_links as Record<string, unknown>[]) {
@@ -296,6 +325,8 @@ export function normalizeBrand(input: unknown): Brand | null {
       unsubscribe_text: str(rawFooter.unsubscribe_text, base.footer.unsubscribe_text),
     },
     social_links: social,
+    darkTokens,
+    schemaVersion: num(raw.schemaVersion, 1),
     is_active: raw.is_active !== false,
     createdAt: num(raw.createdAt, base.createdAt),
     updatedAt: num(raw.updatedAt, base.updatedAt),

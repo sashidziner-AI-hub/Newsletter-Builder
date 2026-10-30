@@ -756,3 +756,136 @@ drawer still open; Ignore dropping the badge from `1 error, 1 warning` to `0 err
 and surviving a reload via `email-builder:ignored:v1`; the unsubscribe warning with the footer
 off; typing a readable hex clearing the error live with no reload; and the export dialog
 agreeing at `1 warning` with Copy and Download both enabled and no `Gmail clips` string left.
+
+## Feature 3B — Dark mode support — done (2026-10-30)
+
+### The shape of it
+
+Light mode never changes. Dark mode is **additive only**: class names beside the inline
+styles, two meta tags, and one `<style>` block. With **Dark mode support** off the exported
+HTML is byte-identical to a pre-3B export — guarded by a snapshot per preset recorded against
+the old renderer before a line of 3B was written.
+
+Measured on the Newsletter preset: dark support costs **2,031 bytes** (19,657 vs 17,626).
+
+### How a dark colour is decided
+
+Not in the renderer. `darkBrand()` swaps the brand's colour tokens for the dark palette and
+the design is resolved a **second time** through the existing 2A boundary:
+
+```ts
+const light = resolveForOutput(design, brand, 'export').design;
+const dark  = resolveForOutput(design, darkBrand(brand), 'export').design;
+```
+
+Which gives the rule the feature asks for with no provenance tracking at all:
+
+- a colour that came from a `brand.*` token differs between the passes → it moves, and the
+  renderer emits a class
+- a hex somebody typed by hand is identical in both passes → no class, so it stays exactly
+  as it is
+
+A per-block or per-row **Dark** override beats both, and is applied to the dark pass in
+`prepareDarkDesign()`.
+
+### Where the role mapping bites, and what was done about it
+
+A brand kit names colours by identity (`primary`, `secondary`, `accent`), not by role, and the
+presets use several of them **both ways round**. Swapping the palette wholesale got two cases
+backwards, both badly rather than subtly, and both were caught by the dark contrast checks
+during development rather than by eye:
+
+- **An ink colour used as a background.** The Promotional hero paints its panel with
+  `brand.secondary` (near-black). Mapped as "strong text" it flipped to `#E5E7EB` — a dark
+  panel turning white. Now an ink colour used as a panel simply stays.
+- **A surface colour used as a foreground.** `brand.content_bg` is how the presets write
+  "white text on the brand colour". Following the surface down turned button labels near-black
+  on a dark fill. Now it becomes whatever actually reads on the background that label sits on
+  — the button's own fill for a button, the block's panel otherwise.
+
+The second one is why the Newsletter preset's orange CTA keeps a readable label in dark mode.
+
+### Class names
+
+Six shared classes (`.dm-page`, `.dm-content`, `.dm-text`, `.dm-link`, `.dm-border`,
+`.dm-btn`) cover the common cases; anything else mints a deterministic per-colour class from
+the hex itself (`.dm-t1a1a1a`). Every rule carries `!important`, or the inline style would
+win. Rules are pruned against the rendered HTML before they ship, because a class is minted
+while a colour is being considered — slightly before the element is known to render at all,
+as an empty hero eyebrow proves.
+
+Each rule is written three times: inside `@media (prefers-color-scheme: dark)`, behind
+Outlook.com's `[data-ogsc]` / `[data-ogsb]`, and — **in the preview only** — behind
+`[data-eb-dark]`.
+
+### The preview
+
+The preview iframe is already the real exported HTML, and it is sandboxed without
+`allow-same-origin` or `allow-scripts`, so nothing can reach into it after the fact. The dark
+preview therefore bakes `data-eb-dark="1"` onto `<html>` at render time and ships the same
+rules a third time behind that attribute. One renderer, one stylesheet.
+
+The canvas is **not** an iframe — it sanitises block HTML into divs, and DOMPurify strips
+`<style>` — so the Light/Dark toggle drives the Preview window, and says so in its tooltip.
+The dark preview carries the note that Gmail's apps invert colours themselves and ignore
+these rules, while Apple Mail, Outlook (Mac/iOS) and Outlook.com follow them.
+
+### The brand dark palette
+
+Eight fields: `page_bg`, `content_bg`, `text`, `muted`, `link`, `border`, `button_bg`,
+`button_text`. Null on every brand saved before 3B and on any brand nobody has filled in, and
+derived in that case: a `#121212` page, a `#1E1E1E` content panel (pure black makes text
+ring), `#E5E7EB` text, the brand link lightened until it clears 4.5:1 on the content
+background, and the brand primary as the button with whichever of black or white reads on it.
+A half-filled palette falls back key by key, so one blank field cannot produce an invisible
+email.
+
+The Brands page gets a **Dark mode** section with the eight fields, a **Derive from light**
+button, a **Reset to derived**, a live sample painted with the palette itself, and a readout
+of the measured text and link ratios.
+
+### Checks
+
+The 3A engine runs its contrast rules a second time over the dark design, as
+`CONTRAST_TEXT_DARK` / `CONTRAST_BUTTON_DARK` / `CONTRAST_LINK_DARK` errors with the same
+stable-id scheme, so a dark issue can be ignored and stay ignored. Plus `DARK_NO_LOGO` (info,
+only when the email actually uses a logo), `DARK_IMAGE_MANUAL` (info, a hero background image
+dark mode cannot restyle) and `SIZE_DARK_OVERHEAD` (warning above 3 KB, measured by rendering
+both ways rather than estimated).
+
+### Known gaps
+
+- **Gmail's apps ignore all of this.** They apply their own inversion. Nothing in this feature
+  changes that; the note in the preview is the honest answer.
+- **The canvas stays light.** It is not an iframe, so it cannot host the stylesheet.
+- **The role mapping is heuristic.** `secondary`/`accent`/`primary` are mapped by the role the
+  presets use them for, with the two corrections above. A brand that uses one of them a third
+  way wants an explicit per-block dark override — and the dark contrast check will say so.
+- **Dark overrides are two fields per block** (background and text), driving a fixed list of
+  colour fields per block type. A block with several text colours moves them together.
+- **Background images and text over images** cannot be restyled; `DARK_IMAGE_MANUAL` flags it.
+
+### Tests
+
+`src/test/dark.test.ts` (89) plus a `dark mode` block in `src/test/app.test.tsx` (4).
+Suite: **639 passing** (was 546), `tsc --noEmit` clean.
+
+Covered: the per-preset byte-identity snapshot with dark off, and that it is the flag rather
+than the caller that decides; both meta tags, the media query and both Outlook.com selectors
+with it on; no `brand.`, no flex/grid/`position:`; every dark rule carrying `!important`;
+every minted class having a rule and every rule being used; the preview-only selector never
+shipping; the logo pair appearing only with `logo_dark_url` and never with dark off; the
+derived palette clearing 4.5:1 for text and link across five brand link colours and the button
+label clearing 3:1 across four primaries; key-by-key fallback; a hand-typed hex staying put
+while a brand colour moves, and a per-block or per-row override beating both; the
+surface-as-label correction; dark contrast errors with stable ids that survive an unrelated
+edit and vanish when the toggle goes off; `DARK_NO_LOGO` appearing and then not; the 3 KB
+overhead threshold; every preset free of dark contrast errors on the Vee brand; and a pre-3B
+brand and email loading unchanged.
+
+Verified in a real browser: the Newsletter preset on the Vee brand previewing with a `#121212`
+page, a `#1E1E1E` content panel, light heading text, the orange CTA with a readable dark
+label and orange links; switching back to Light giving byte-for-byte the same 19,657-character
+document as before; the export carrying both meta tags and `[data-ogsc]` with dark on and
+**none** of it with dark off (17,626 characters, no `dm-` anywhere); and a brand with a light
+logo and no dark one raising `DARK_NO_LOGO` in the drawer with its hint.
