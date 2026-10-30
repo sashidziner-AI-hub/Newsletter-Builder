@@ -100,7 +100,7 @@ function IconBtn({
       }`}
     >
       {children}
-      {label && <span className="hidden xl:inline">{label}</span>}
+      {label && <span className="hidden 2xl:inline">{label}</span>}
     </button>
   );
 }
@@ -165,11 +165,14 @@ export function TopBar({
         <span className="hidden text-sm font-semibold text-slate-900 lg:inline">Newsletter Builder</span>
       </div>
 
+      {/* grows into free space rather than clipping at a fixed width; the
+          tooltip covers titles longer than any toolbar could show */}
       <input
         aria-label="Email title"
+        title={design.body.title}
         value={design.body.title}
         onChange={(e) => updateBody({ title: e.target.value })}
-        className="w-56 rounded-md border border-transparent px-2 py-1 text-sm font-medium text-slate-800 hover:border-slate-300 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+        className="min-w-[7rem] flex-1 basis-56 max-w-xs rounded-md border border-transparent px-2 py-1 text-sm font-medium text-slate-800 hover:border-slate-300 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       />
 
       <SaveStatus />
