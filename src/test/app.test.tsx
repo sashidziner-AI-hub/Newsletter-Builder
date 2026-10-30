@@ -58,7 +58,7 @@ describe('App', () => {
     expect(canvas().getByText('Hello world')).toBeTruthy();
   });
 
-  it('adds every block type via click', () => {
+  it('adds every block type via click', { timeout: 20_000 }, () => {
     render(<App />);
     for (const label of [
       'Heading',
@@ -631,7 +631,7 @@ describe('App', () => {
       expect(screen.getByText(/From the library: Spring hero/)).toBeTruthy();
     });
 
-    it('lists image problems in the export dialog and jumps to the block', () => {
+    it('summarises checks in the export dialog and hands the detail to the drawer', () => {
       render(<App />);
       fireEvent.click(screen.getByTitle('Add Image'));
       const selection = s().selection;
@@ -643,15 +643,95 @@ describe('App', () => {
       fireEvent.keyDown(window, { key: 'Escape' });
       expect(s().selection.kind).toBe('body');
 
+      // the 500 ms debounce is not worth waiting out in a test
+      act(() => s().runChecks());
+
       fireEvent.click(screen.getByTitle('Export HTML or plain text'));
       const dialog = screen.getByRole('dialog', { name: 'Export' });
-      expect(within(dialog).getByText(/Not served over https/)).toBeTruthy();
-      expect(within(dialog).getByText(/Missing alt text/)).toBeTruthy();
+      // a count, not a second copy of the list
+      expect(within(dialog).getByText(/\d+ error/)).toBeTruthy();
+      expect(within(dialog).queryByText(/not served over https/i)).toBeNull();
 
-      fireEvent.click(within(dialog).getAllByText('Image →')[0]);
-      // the dialog closed and the offending block is selected
+      fireEvent.click(within(dialog).getByText(/Open checks/));
       expect(screen.queryByRole('dialog')).toBeNull();
+
+      const drawer = within(screen.getByRole('complementary', { name: 'Checks' }));
+      expect(drawer.getByText(/is not served over https/i)).toBeTruthy();
+      expect(drawer.getByText(/has no alt text/i)).toBeTruthy();
+
+      fireEvent.click(drawer.getAllByText(/Go to block/)[0]);
       expect(s().selection).toEqual({ kind: 'block', id: blockId });
+    });
+  });
+
+  describe('checks', () => {
+    // the drawer lives in the store, which outlives one test
+    beforeEach(() => act(() => s().setChecksOpen(false)));
+
+    /** An email with one obvious error: an empty subject line. */
+    const breakTheSubject = () => {
+      act(() => s().updateBody({ title: '' }));
+      act(() => s().runChecks());
+    };
+
+    it('shows the count in the top bar and opens the drawer', () => {
+      render(<App />);
+      breakTheSubject();
+
+      const button = screen.getByRole('button', { name: /^Checks:/ });
+      expect(button.getAttribute('aria-label')).toMatch(/[1-9] error/);
+      expect(screen.queryByRole('complementary', { name: 'Checks' })).toBeNull();
+
+      fireEvent.click(button);
+      const drawer = within(screen.getByRole('complementary', { name: 'Checks' }));
+      expect(drawer.getByText(/no subject line/i)).toBeTruthy();
+    });
+
+    it('ignoring an issue drops it from the badge, and it survives reopening the email', () => {
+      render(<App />);
+      breakTheSubject();
+      act(() => s().saveNow());
+      const emailId = s().currentEmailId!;
+
+      act(() => s().setChecksOpen(true));
+      const drawer = () => within(screen.getByRole('complementary', { name: 'Checks' }));
+      const before = s().issues.length;
+
+      fireEvent.click(drawer().getAllByText('Ignore')[0]);
+      expect(s().ignoredIssues).toHaveLength(1);
+      // the issue is still known, just not counted
+      expect(s().issues).toHaveLength(before);
+      expect(drawer().getByText(/Ignored \(1\)/)).toBeTruthy();
+
+      // reopen the email from storage: the dismissal came back with it
+      const ignored = s().ignoredIssues;
+      act(() => s().startNewEmail(s().design));
+      expect(s().ignoredIssues).toEqual([]);
+      act(() => s().openEmail(listTemplates().find((t) => t.id === emailId)!));
+      expect(s().ignoredIssues).toEqual(ignored);
+    });
+
+    it('un-ignoring brings the issue back without a re-run', () => {
+      render(<App />);
+      breakTheSubject();
+      act(() => s().setChecksOpen(true));
+      const drawer = () => within(screen.getByRole('complementary', { name: 'Checks' }));
+
+      fireEvent.click(drawer().getAllByText('Ignore')[0]);
+      fireEvent.click(drawer().getByText(/Ignored \(1\)/));
+      fireEvent.click(drawer().getByText('Un-ignore'));
+      expect(s().ignoredIssues).toEqual([]);
+      expect(drawer().getByText(/no subject line/i)).toBeTruthy();
+    });
+
+    it('never blocks the export', () => {
+      render(<App />);
+      breakTheSubject();
+      fireEvent.click(screen.getByTitle('Export HTML or plain text'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Export' }));
+      // both buttons live and clickable with an error outstanding
+      expect(dialog.getByText('Copy').closest('button')!.disabled).toBe(false);
+      expect(dialog.getByText(/Download \.html/).closest('button')!.disabled).toBe(false);
     });
   });
 

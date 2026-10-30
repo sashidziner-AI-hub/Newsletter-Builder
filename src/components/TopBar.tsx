@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Braces,
+  Check,
   Code2,
   Eye,
   FilePlus2,
@@ -10,14 +11,17 @@ import {
   Monitor,
   Palette,
   Redo2,
+  ShieldAlert,
+  ShieldCheck,
   Smartphone,
   Undo2,
   Upload,
 } from 'lucide-react';
+import { summarise } from '../lib/checks';
 import { resolvedDesign } from '../lib/output';
 import { normalizeDesign } from '../lib/design-ops';
 import { downloadFile, slugify } from '../lib/util';
-import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
+import { useAccessibleBrands, useActiveBrand, useEditor, useVisibleIssues } from '../store';
 import { useConfirm } from './ConfirmDialog';
 
 type ModalName = 'preview' | 'html' | 'templates' | 'brands' | 'new' | 'history' | null;
@@ -101,6 +105,58 @@ function IconBtn({
     >
       {children}
       {label && <span className="hidden 2xl:inline">{label}</span>}
+    </button>
+  );
+}
+
+/**
+ * The Checks button. Its badge is the worst thing outstanding: red for errors,
+ * amber for warnings, a green tick when the email is clean. It never disables
+ * anything — it is a readout, not a gate.
+ */
+function ChecksButton() {
+  const issues = useVisibleIssues();
+  const open = useEditor((s) => s.checksOpen);
+  const setChecksOpen = useEditor((s) => s.setChecksOpen);
+  const counts = summarise(issues);
+
+  const worst = counts.error > 0 ? 'error' : counts.warning > 0 ? 'warning' : 'clean';
+  const title =
+    worst === 'clean'
+      ? counts.info > 0
+        ? `Checks: ${counts.info} suggestion${counts.info === 1 ? '' : 's'}`
+        : 'Checks: nothing to fix'
+      : `Checks: ${counts.error} error${counts.error === 1 ? '' : 's'}, ${counts.warning} warning${
+          counts.warning === 1 ? '' : 's'
+        }`;
+
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      aria-pressed={open}
+      onClick={() => setChecksOpen(!open)}
+      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
+        open ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+      }`}
+    >
+      {worst === 'clean' ? (
+        <ShieldCheck size={17} className={counts.info > 0 ? undefined : 'text-emerald-600'} />
+      ) : (
+        <ShieldAlert size={17} className={worst === 'error' ? 'text-red-600' : 'text-amber-600'} />
+      )}
+      <span
+        className={`min-w-[1.1rem] rounded px-1 text-[11px] font-bold leading-[1.1rem] ${
+          worst === 'error'
+            ? 'bg-red-100 text-red-700'
+            : worst === 'warning'
+              ? 'bg-amber-100 text-amber-800'
+              : 'bg-emerald-100 text-emerald-700'
+        }`}
+      >
+        {worst === 'error' ? counts.error : worst === 'warning' ? counts.warning : <Check size={11} className="mx-auto" />}
+      </span>
     </button>
   );
 }
@@ -272,6 +328,7 @@ export function TopBar({
         <IconBtn title="Export HTML or plain text" label="Export" onClick={() => openModal('html')}>
           <Code2 size={17} />
         </IconBtn>
+        <ChecksButton />
         <span className="mx-1.5 h-5 w-px bg-slate-200" />
         <IconBtn title="Preview" label="Preview" primary onClick={() => openModal('preview')}>
           <Eye size={17} />

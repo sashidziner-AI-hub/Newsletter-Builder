@@ -21,12 +21,13 @@ npm run build      # type-check + production build into dist/
 | Editing | Drag & drop from the left panel, drag to reorder blocks (across columns) and rows, duplicate, delete, undo/redo (Ctrl+Z / Ctrl+Shift+Z), Delete key, Ctrl+D |
 | Styling | Per-block colors, fonts (email-safe stacks), sizes, alignment, padding, border radius; global body width / colors / font / link color |
 | Preview | Desktop / mobile canvas toggle, full preview modal (sandboxed iframe, real responsive media query) |
-| Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html`, size warning for Gmail's ~102 KB clipping |
+| Output | Email-safe HTML (table layout, inline styles, Outlook conditional tables, mobile CSS, preheader), copy / download `.html` |
+| Checks | A live quality panel: size against Gmail's ~102 KB clip, dead and insecure links, missing unsubscribe, empty or over-long subject and preheader, WCAG AA contrast with the ratio and a suggested fix, text under 12px, buttons too small to tap, image-only content and every image rule. Badge in the top bar, drawer with **Go to block** and per-email **Ignore**. Never blocks editing or export |
 | Sending prep | Merge tags with per-ESP formats (double curly, Mailchimp, HubSpot, custom), UTM link tagger with per-link opt-out, and a plain-text version alongside the HTML |
 | Data | Design is a plain JSON document (`src/types.ts`): export / import JSON, named templates |
 | Saving | Auto-save every 2 s with visible status, reload recovery, 20-deep version history with read-only preview and restore |
 | Saved blocks | Save any block or row to a searchable library with categories and brand-aware thumbnails, drag or click to reuse, export / import as JSON |
-| Images | A library of vetted https image URLs with names, default alt text, tags and brand scoping; a picker on every image field; export checks for non-https, missing alt, broken and placeholder images, each jumping to its block |
+| Images | A library of vetted https image URLs with names, default alt text, tags and brand scoping; a picker on every image field. The image rules live in the Checks panel |
 | Presets | **New** opens a dialog of Blank + 8 starter presets (Newsletter, Promotional, Product launch, Welcome, Cold outreach, Event invitation, Order confirmation, Weekly digest), each with a live thumbnail rendered in the active brand |
 | Brands | Brand kits (colors, fonts, button style, logos, footer, social links), brand switcher in the top bar, brand color swatches on every color field, "Reset to brand", brands page with duplicate / archive / export / import JSON and a live kit preview |
 
@@ -49,11 +50,13 @@ src/
   lib/blocks-library.ts saved blocks: validation, import planning, instantiation
   lib/versions.ts       snapshot rules, pruning (pure, no storage)
   lib/image-storage.ts  image library: adapter interface, validation, probing
-  lib/image-audit.ts    design-level image checks (block-aware, unlike lib/audit.ts)
+  lib/image-audit.ts    where the images are: collector + resolution notes
   lib/brand.ts          brand kit, token resolution, access helpers
   lib/storage.ts        localStorage drafts + templates + brands
   lib/image.ts          image upload downscaling
-  lib/audit.ts          pre-send image checks for the export dialog
+  lib/audit.ts          placeholder-art host list
+  lib/checks.ts         the quality engine: resolved design + exported HTML -> Issue[]
+  lib/contrast.ts       WCAG 2.1 contrast maths (pure)
   components/           canvas (dnd-kit), panels, property editors, TipTap rich text, modals
   test/                 renderer, store, drop-targeting and UI tests
 ```
@@ -82,6 +85,24 @@ Export is never blocked.
 
 Images below twice their rendered width get a **Low resolution** note, and anything over
 1600px wide gets a **Very large image** note. Both are advisory.
+
+## Checks
+
+The shield in the top bar is the count of what is outstanding: red for errors, amber for
+warnings, a green tick when the email is clean. Clicking it opens a drawer over the properties
+panel, grouped by severity, with **Go to block** and **Ignore** on every issue.
+
+Checks run on what is actually sent — the resolved design and the real exported HTML, the same
+pair the Export dialog builds — so they see brand colours, UTM-tagged links and ESP-formatted
+merge tags rather than the stored document. They are debounced at 500 ms and run on load as
+well as on edit.
+
+**They never block editing or export.** The Export dialog shows a one-line summary and hands
+the detail to the drawer; Copy and Download stay live with errors outstanding.
+
+**Ignore** is per issue and per email, and survives reopening it. Presets will legitimately
+raise warnings — their links are `https://example.com` and their art is placeholder — which is
+what Ignore is for, until the real content goes in.
 
 ## Saving, history and saved blocks
 
@@ -207,9 +228,15 @@ Vee Technologies brand.
   field. Extend the table in `src/lib/merge.ts`.
 - **Merge-tag sample values are per-browser**, so a teammate opening the same template sees
   their own.
-- **Presets ship with placeholder images and copy.** The export dialog warns while any remain;
+- **Presets ship with placeholder images and copy.** The Checks panel warns while any remain;
   replace the art, the alt text and the sample copy (including the Cold outreach signature) before
   a real send.
+- **Checks classify links, they do not fetch them.** A well-formed https URL that 404s cannot be
+  detected without a server. Images are different: **Check images load** probes them on demand, and
+  an image that has not been probed is never reported as broken.
+- **Contrast is computed from the colours in the design.** Text over a background image is reported
+  as unknown rather than guessed at, and a client that forces dark mode is beyond it.
+- **Ignored checks are per email and per browser**, stored alongside the email.
 - **Brand footers and social links** feed the Footer block, which pulls them from the active brand
   with a per-email override. Nothing auto-inserts a Footer block into a new email yet.
 - **Outlook on Windows ignores background images**, so the Hero's centered background image falls
@@ -227,6 +254,6 @@ Vee Technologies brand.
 
 ## Ideas for next versions
 
-Merge-tag picker with groups, display conditions, countdown timer block, content/accessibility audit,
+Merge-tag picker with groups, display conditions, countdown timer block,
 template gallery thumbnails, Supabase persistence (auth + `templates` table with the design JSON in a `jsonb`
 column), test-email sending, AI "generate section" using the design JSON schema.

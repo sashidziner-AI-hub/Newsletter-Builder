@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, Copy, Download, Monitor, Smartphone, Trash2, X } from 'lucide-react';
-import type { Device } from '../types';
 import {
-  type ImageProblemKind,
-  PROBLEM_HELP,
-  PROBLEM_LABEL,
-  auditDesignImages,
-  collectImages,
-  groupProblems,
-} from '../lib/image-audit';
-import { probeImage } from '../lib/image-storage';
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
+  Download,
+  Monitor,
+  ShieldAlert,
+  Smartphone,
+  Trash2,
+  X,
+} from 'lucide-react';
+import type { Device } from '../types';
+import { summarise } from '../lib/checks';
 import { resolveForOutput, resolvedDesign } from '../lib/output';
 import { toPlainText } from '../lib/plaintext';
 import { renderDesign } from '../lib/render';
@@ -23,7 +25,7 @@ import {
   storageUsage,
   type SavedTemplate,
 } from '../lib/storage';
-import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
+import { useAccessibleBrands, useActiveBrand, useEditor, useVisibleIssues } from '../store';
 import { useConfirm } from './ConfirmDialog';
 
 export function Modal({
@@ -139,32 +141,16 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
   const body = tab === 'html' ? html : plain;
   const kb = Math.round((new Blob([body]).size / 1024) * 10) / 10;
   const utmOn = design.body.utm.enabled;
-  const select = useEditor((s) => s.select);
+  const setChecksOpen = useEditor((s) => s.setChecksOpen);
 
-  // the checks walk the resolved design, so every finding knows its block and
-  // the hero background is included — neither is possible from the HTML
-  const uses = useMemo(() => collectImages(out.design), [out]);
-  /** URLs we have actually probed; an unchecked image is never called broken */
-  const [loadStatus, setLoadStatus] = useState<Map<string, 'ok' | 'broken'>>(new Map());
-  const [checking, setChecking] = useState(false);
-  const problems = useMemo(() => auditDesignImages(uses, loadStatus), [uses, loadStatus]);
-  const grouped = useMemo(() => groupProblems(problems), [problems]);
+  // the same engine result the badge shows; the size warning that used to live
+  // here is its SIZE rule now, so there is one verdict rather than two
+  const issues = useVisibleIssues();
+  const counts = summarise(issues);
 
-  const checkLoads = async () => {
-    setChecking(true);
-    const next = new Map(loadStatus);
-    for (const url of new Set(uses.map((u) => u.url))) {
-      if (!/^https:\/\//i.test(url)) continue;
-      const probe = await probeImage(url);
-      next.set(url, probe.ok ? 'ok' : 'broken');
-    }
-    setLoadStatus(next);
-    setChecking(false);
-  };
-
-  /** Close the dialog and put the cursor on the block that needs attention. */
-  const jumpTo = (blockId: string) => {
-    select({ kind: 'block', id: blockId });
+  /** Hand the detail over to the drawer rather than duplicating it here. */
+  const openChecks = () => {
+    setChecksOpen(true);
     onClose();
   };
 
@@ -202,11 +188,6 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-5 py-3">
         <div className="text-xs text-slate-500">
           {kb} KB
-          {tab === 'html' && kb > 100 && (
-            <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-              Gmail clips emails larger than ~102 KB — reduce embedded images or content.
-            </span>
-          )}
           {utmOn && (
             <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
               UTM added to {out.utm.added} {out.utm.added === 1 ? 'link' : 'links'}, skipped{' '}
@@ -223,58 +204,44 @@ export function ExportHtmlModal({ onClose, notify }: { onClose: () => void; noti
           </button>
         </div>
       </div>
-      {tab === 'html' && (
-        <div className="max-h-56 shrink-0 overflow-y-auto border-b border-slate-200 bg-slate-50 px-5 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-medium text-slate-700">
-              Images — {uses.length} in this email
-              {problems.length === 0 && uses.length > 0 && (
-                <span className="ml-2 font-normal text-emerald-700">nothing to fix</span>
-              )}
-            </p>
-            <button
-              type="button"
-              className={ghostBtn}
-              disabled={checking || uses.length === 0}
-              onClick={() => void checkLoads()}
-            >
-              {checking ? 'Checking…' : 'Check images load'}
-            </button>
-          </div>
-
-          {grouped.length > 0 && (
-            <ul className="mt-2 space-y-2">
-              {grouped.map(([kind, items]) => (
-                <li key={kind}>
-                  <p className="flex items-center gap-1.5 text-xs font-medium text-amber-900">
-                    <AlertTriangle size={13} className="shrink-0" />
-                    {PROBLEM_LABEL[kind as ImageProblemKind]} · {items.length}
-                  </p>
-                  <p className="ml-[18px] text-[11px] leading-snug text-slate-500">
-                    {PROBLEM_HELP[kind as ImageProblemKind]}
-                  </p>
-                  <ul className="ml-[18px] mt-1 flex flex-wrap gap-1.5">
-                    {items.map((p, n) => (
-                      <li key={`${kind}-${p.use.blockId}-${p.use.field}-${n}`}>
-                        <button
-                          type="button"
-                          onClick={() => jumpTo(p.use.blockId)}
-                          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 hover:border-brand-500 hover:text-brand-700"
-                        >
-                          {p.use.label} →
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-2 text-[11px] leading-snug text-slate-400">
-            Warnings only — the export is never blocked.
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-5 py-2.5">
+        {counts.total === 0 ? (
+          <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+            <CheckCircle2 size={14} className="shrink-0" /> Checks passed
           </p>
-        </div>
-      )}
+        ) : (
+          <p
+            className={`flex items-center gap-1.5 text-xs font-medium ${
+              counts.error > 0 ? 'text-red-700' : 'text-amber-800'
+            }`}
+          >
+            {counts.error > 0 ? (
+              <ShieldAlert size={14} className="shrink-0" />
+            ) : (
+              <AlertTriangle size={14} className="shrink-0" />
+            )}
+            {[
+              counts.error > 0 && `${counts.error} error${counts.error === 1 ? '' : 's'}`,
+              counts.warning > 0 && `${counts.warning} warning${counts.warning === 1 ? '' : 's'}`,
+              counts.info > 0 && `${counts.info} suggestion${counts.info === 1 ? '' : 's'}`,
+            ]
+              .filter(Boolean)
+              .join(', ')}
+          </p>
+        )}
+        {counts.total > 0 && (
+          <button
+            type="button"
+            onClick={openChecks}
+            className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-700 hover:border-brand-500 hover:text-brand-700"
+          >
+            Open checks &rarr;
+          </button>
+        )}
+        <p className="ml-auto text-[11px] text-slate-400">
+          Warnings only &mdash; the export is never blocked.
+        </p>
+      </div>
       <textarea
         readOnly
         aria-label={tab === 'html' ? 'Exported HTML' : 'Exported plain text'}

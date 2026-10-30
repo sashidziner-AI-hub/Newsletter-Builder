@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { auditImageSources, isPlaceholderImage } from '../lib/audit';
+import { isPlaceholderImage } from '../lib/audit';
+import { checkDesign } from '../lib/checks';
 import { emptyBrand, resolveDesign, veeBrand } from '../lib/brand';
 import { normalizeDesign } from '../lib/design-ops';
 import { PRESETS, type Preset } from '../lib/presets';
@@ -223,9 +224,9 @@ describe('placeholder image audit', () => {
     const withArt = PRESETS.filter((p) => exportHtml(p.build(vee), vee).includes('<img'));
     expect(withArt.length).toBeGreaterThan(0);
     for (const preset of withArt) {
-      const audit = auditImageSources(exportHtml(preset.build(vee), vee));
-      expect(audit.placeholders, preset.name).toBeGreaterThan(0);
-      expect(audit.ok, preset.name).toBe(false);
+      const design = resolveDesign(preset.build(vee), vee, 'export');
+      const codes = checkDesign(design, renderDesign(design), vee).map((i) => i.code);
+      expect(codes, preset.name).toContain('IMAGE_PLACEHOLDER');
     }
   });
 
@@ -243,13 +244,17 @@ describe('placeholder image audit', () => {
         }));
       }
     }
-    const audit = auditImageSources(exportHtml(design, vee));
-    expect(audit.placeholders).toBe(0);
-    expect(audit.ok).toBe(true);
+    const resolved = resolveDesign(design, vee, 'export');
+    const codes = checkDesign(resolved, renderDesign(resolved), vee).map((i) => i.code);
+    expect(codes).not.toContain('IMAGE_PLACEHOLDER');
+    expect(codes).not.toContain('IMAGE_EMBEDDED');
+    expect(codes).not.toContain('IMAGE_NOT_HTTPS');
   });
 
   it('does not flag the cold outreach preset, which has no images', () => {
     const preset = PRESETS.find((p) => p.id === 'cold-outreach')!;
-    expect(auditImageSources(exportHtml(preset.build(vee), vee)).placeholders).toBe(0);
+    const design = resolveDesign(preset.build(vee), vee, 'export');
+    const codes = checkDesign(design, renderDesign(design), vee).map((i) => i.code);
+    expect(codes).not.toContain('IMAGE_PLACEHOLDER');
   });
 });

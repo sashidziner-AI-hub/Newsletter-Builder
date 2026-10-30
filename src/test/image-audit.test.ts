@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { veeBrand } from '../lib/brand';
 import { createBlock, createRow, emptyDesign } from '../lib/defaults';
-import {
-  VERY_LARGE_WIDTH,
-  auditDesignImages,
-  collectImages,
-  groupProblems,
-  resolutionNote,
-} from '../lib/image-audit';
+import { VERY_LARGE_WIDTH, collectImages, resolutionNote } from '../lib/image-audit';
 import { resolvedDesign } from '../lib/output';
 import { PRESETS } from '../lib/presets';
 import type { Block, Design } from '../types';
@@ -119,75 +113,6 @@ describe('collectImages', () => {
   });
 });
 
-/* --------------------------------------------------------------- problems */
-
-describe('auditDesignImages', () => {
-  const useWith = (patch: Partial<ReturnType<typeof collectImages>[number]>) => ({
-    blockId: 'blk_1',
-    blockType: 'image' as const,
-    field: 'src',
-    label: 'Image',
-    url: 'https://a.test/ok.png',
-    alt: 'Fine',
-    displayWidth: 600,
-    ...patch,
-  });
-
-  it('is quiet about a well-formed image', () => {
-    expect(auditDesignImages([useWith({})])).toEqual([]);
-  });
-
-  it('flags http, data:, missing alt and placeholders', () => {
-    const problems = auditDesignImages([
-      useWith({ url: 'http://a.test/x.png' }),
-      useWith({ url: 'data:image/png;base64,AAAA' }),
-      useWith({ alt: '   ' }),
-      useWith({ url: 'https://picsum.photos/seed/x/600/300' }),
-    ]);
-    const kinds = problems.map((p) => p.kind);
-    expect(kinds).toContain('not-https');
-    expect(kinds).toContain('embedded');
-    expect(kinds).toContain('missing-alt');
-    expect(kinds).toContain('placeholder');
-  });
-
-  it('only calls an image broken when it has actually been probed', () => {
-    const use = useWith({});
-    expect(auditDesignImages([use])).toEqual([]);
-    expect(auditDesignImages([use], new Map([[use.url, 'ok']]))).toEqual([]);
-
-    const broken = auditDesignImages([use], new Map([[use.url, 'broken']]));
-    expect(broken.map((p) => p.kind)).toEqual(['broken']);
-  });
-
-  it('never asks for alt on a field that has none', () => {
-    // hero background, social icon and logos carry no alt of their own
-    expect(auditDesignImages([useWith({ alt: null })])).toEqual([]);
-  });
-
-  it('leaves merge tags alone', () => {
-    expect(auditDesignImages([useWith({ url: '{{hero_image_url}}', alt: 'x' })])).toEqual([]);
-    expect(auditDesignImages([useWith({ url: '*|HERO|*', alt: 'x' })])).toEqual([]);
-  });
-
-  it('reports both problems when an image is placeholder AND missing alt', () => {
-    const problems = auditDesignImages([
-      useWith({ url: 'https://picsum.photos/seed/a/60/60', alt: '' }),
-    ]);
-    expect(problems.map((p) => p.kind).sort()).toEqual(['missing-alt', 'placeholder']);
-  });
-
-  it('groups by kind, worst first', () => {
-    const grouped = groupProblems(
-      auditDesignImages([
-        useWith({ alt: '' }),
-        useWith({ url: 'data:image/png;base64,AA' }),
-      ]),
-    );
-    expect(grouped[0][0]).toBe('embedded');
-  });
-});
-
 /* ------------------------------------------------------------- resolution */
 
 describe('resolutionNote', () => {
@@ -211,29 +136,18 @@ describe('resolutionNote', () => {
 
 /* ---------------------------------------------------------------- presets */
 
-describe('the presets, through the new audit', () => {
-  it('flags their placeholder art and nothing worse', () => {
-    const brand = veeBrand();
-    for (const preset of PRESETS) {
-      const design = resolvedDesign(preset.build(brand), brand, 'export');
-      const problems = auditDesignImages(collectImages(design));
-      const kinds = new Set(problems.map((p) => p.kind));
-      expect(kinds.has('embedded'), preset.name).toBe(false);
-      expect(kinds.has('not-https'), preset.name).toBe(false);
-    }
-  });
-
-  it('finds the placeholders the Newsletter preset ships with', () => {
+describe('the presets, through the collector', () => {
+  it('finds every placeholder the Newsletter preset ships with, each with a block', () => {
     const brand = veeBrand();
     const design = resolvedDesign(
       PRESETS.find((p) => p.id === 'newsletter')!.build(brand),
       brand,
       'export',
     );
-    const problems = auditDesignImages(collectImages(design));
-    expect(problems.filter((p) => p.kind === 'placeholder').length).toBeGreaterThan(0);
-    // and each one knows which block to jump to
-    for (const p of problems) expect(p.use.blockId).toBeTruthy();
+    const uses = collectImages(design);
+    expect(uses.length).toBeGreaterThan(0);
+    // what each one IS is the engine's verdict; that it can be jumped to is this file's
+    for (const use of uses) expect(use.blockId).toBeTruthy();
   });
 
   it('finds no images at all in the Cold outreach preset', () => {

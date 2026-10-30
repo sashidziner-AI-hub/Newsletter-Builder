@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import DOMPurify from 'dompurify';
 import { Copy, GripVertical, Trash2 } from 'lucide-react';
@@ -38,6 +38,17 @@ const BlockView = memo(function BlockView({
   const confirm = useConfirm();
   const hint = useDropHint();
 
+  const node = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * A block selected from the Checks drawer can be far off-screen. `nearest`
+   * does nothing when the block is already fully visible, so clicking a block
+   * in the canvas never jolts the page.
+   */
+  useEffect(() => {
+    if (selected) node.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [selected]);
+
   const drag = useDraggable({ id: `b:${block.id}`, data: { kind: 'block', blockId: block.id } });
   const drop = useDroppable({ id: block.id, data: { kind: 'block', blockId: block.id, columnId: column.id } });
 
@@ -59,9 +70,10 @@ const BlockView = memo(function BlockView({
 
   return (
     <div
-      ref={(node) => {
-        drag.setNodeRef(node);
-        drop.setNodeRef(node);
+      ref={(el) => {
+        node.current = el;
+        drag.setNodeRef(el);
+        drop.setNodeRef(el);
       }}
       {...drag.attributes}
       {...drag.listeners}

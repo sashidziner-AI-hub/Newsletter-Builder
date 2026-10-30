@@ -632,3 +632,127 @@ mutating emails that already use the image; the upload refusal writing nothing.
 Verified in a real browser: three seeded images listed with thumbnails, the brand filter
 narrowing to shared, the picker filling a Hero's URL and alt, the export list grouping two
 placeholders with working jump-to-block, and a pasted `data:` URI refused with a reason.
+
+## Feature 3A — Checks panel — done (2026-10-30)
+
+### What it is
+
+One engine that reads what is actually sent and says what an inbox will do with it. It
+**never blocks** editing or export — the Export dialog's buttons are live with errors
+outstanding, by design and by test.
+
+### One source of truth
+
+`checkDesign(resolvedDesign, exportedHtml, brand, opts)` in `src/lib/checks.ts` returns
+`Issue[]`. It is handed exactly the pair the export dialog builds:
+
+```ts
+const out  = resolveForOutput(design, brand, 'export'); // brand tokens, UTM, merge format
+const html = renderDesign(out.design);                  // the string that ships
+```
+
+So every rule sees resolved colours, UTM-tagged links and ESP-formatted merge tags, not the
+stored document. Passing the **unresolved** design is a caller bug: a `brand.logo` token is
+not a URL the engine can judge, and it will be reported as one.
+
+Two older audits were retired into it rather than left running alongside:
+
+- 1A's `auditImageSources(html)` — gone. `src/lib/audit.ts` now holds only
+  `isPlaceholderImage()` / `PLACEHOLDER_PATTERN`.
+- 2C-1's `auditDesignImages()` / `groupProblems()` / `PROBLEM_LABEL` / `PROBLEM_HELP` — gone.
+  `src/lib/image-audit.ts` keeps `collectImages()` (the collector) and `resolutionNote()`.
+
+The export dialog's hardcoded `kb > 100` Gmail warning is gone too; it is the SIZE rule now.
+
+### The rules
+
+| Group | Codes |
+|---|---|
+| SIZE | `SIZE_NEAR_LIMIT` warning ≥ 90 KB, `SIZE_OVER_LIMIT` error ≥ 102 KB, counted in UTF-8 bytes on the real HTML |
+| LINKS | `LINK_EMPTY`, `LINK_HASH`, `LINK_RELATIVE`, `LINK_HTTP`, `LINK_PLACEHOLDER_DOMAIN` |
+| UNSUBSCRIBE | `UNSUBSCRIBE_MISSING` warning |
+| SUBJECT / PREHEADER | `SUBJECT_EMPTY` error, `SUBJECT_LONG` info > 60, `PREHEADER_EMPTY` warning, `PREHEADER_LONG` info > 110 |
+| CONTRAST | `CONTRAST_TEXT` / `CONTRAST_BUTTON` / `CONTRAST_LINK` errors, `CONTRAST_UNKNOWN` info |
+| READABILITY | `TEXT_TOO_SMALL` warning < 12px, `TAP_TARGET_SMALL` warning under 44px |
+| CONTENT | `CONTENT_THIN` warning |
+| IMAGES | `IMAGE_EMBEDDED`, `IMAGE_NOT_HTTPS`, `IMAGE_MISSING_ALT`, `IMAGE_PLACEHOLDER`, `IMAGE_BROKEN`, `IMAGE_TOO_WIDE` |
+
+Merge tags are never a broken link or image; well-formed `mailto:` and `tel:` are valid.
+
+### Contrast
+
+`src/lib/contrast.ts` is the WCAG 2.1 maths, kept pure so the numbers are checkable:
+sRGB linearisation, relative luminance, 4.5:1 normal / 3:1 large (≥ 24px, or ≥ 18.66px bold).
+`suggestFix()` walks the foreground towards black or white until it passes, which is where the
+"Try #919191" in a message comes from.
+
+The effective background follows the renderer's own chain:
+`block.bgColor → row.contentBgColor → body.contentBgColor → row.bgColor → body.bgColor`.
+A button is judged against its own fill; text over a hero background image is not judged at
+all, and says so (`CONTRAST_UNKNOWN`).
+
+### Stable ids, so Ignore means something
+
+`` `${code}#${blockId ?? 'email'}#${discriminator}` ``. The same problem keeps the same id
+across runs and across unrelated edits elsewhere in the email, which is what lets a dismissal
+persist. Ignored ids live under `email-builder:ignored:v1`, keyed by email id — a warning
+waved away on one newsletter is still raised on the next — and are written through 2B's
+`writeSafe()`. Deleting an email takes its ignore list with it.
+
+An email with no record yet has nowhere to store them; the store flushes them the moment
+auto-save mints its id.
+
+### The UI
+
+- **Top bar badge** — red error count, else amber warning count, else a green tick. A readout,
+  never a gate.
+- **Drawer** (`src/components/ChecksPanel.tsx`) — overlays the properties panel rather than
+  displacing it, so a block jumped to from here has its settings waiting underneath. Grouped
+  by severity; each issue has its message, hint, **Go to block** (or **Email settings**),
+  **Ignore**, and its code. An **Ignored (n)** section brings them back.
+- **Canvas** scrolls the selected block into view with `block: 'nearest'`, which is a no-op
+  when the block is already visible — so an ordinary click never jolts the page.
+- **Export dialog** shows a one-line summary and an **Open checks →** hand-off, instead of
+  repeating the list.
+
+Checks are debounced at 500 ms. Unlike auto-save they also run on a whole-design load: a badge
+that stayed empty until the first edit would be lying about the email you just opened.
+
+### Checks that do not lie
+
+Load failures are still on demand — **Check images load** probes the URLs, and an image that
+has not been probed is **never** called broken. The library's own cached statuses and measured
+widths seed the engine, which is where `IMAGE_TOO_WIDE` gets its numbers.
+
+### Known gaps
+
+- Links are classified, not fetched. A well-formed https URL that 404s is not detectable
+  without a server.
+- Contrast is computed from the colours in the design. A background image, a gradient pasted
+  into an HTML block, or a client that forces dark mode are all beyond it.
+- Editing a brand re-runs the checks, but adding or re-probing an image in the library does
+  not; the next design edit picks it up.
+- The engine takes the resolved design by contract and does not defend against being handed
+  the raw one.
+
+### Tests
+
+`src/test/contrast.test.ts` (15) and `src/test/checks.test.ts` (44), plus a `checks` block in
+`src/test/app.test.tsx` (4). `image-audit.test.ts` drops to 14 as its problem taxonomy moved
+into the engine. Suite: **546 passing** (was 489), `tsc --noEmit` clean.
+
+Covered: #000/#fff = 21:1, #777777/#fff ≈ 4.48 failing and #767676/#fff ≈ 4.54 passing, the
+large-text threshold; size at 89/90/101/102 KB and bytes-not-characters; every link verdict,
+merge tags, mailto/tel, UTM-tagged links; the unsubscribe tag in all four ESP formats and the
+Show-footer-off case; the renderer's background chain; a button against its own fill; a hero
+background image skipped with a reason; text under 12px and buttons under 44px; thin content
+with the hidden preheader excluded; images broken only once probed and alt only where the
+field has one; ids stable across runs and distinct per block; ignore persisting across a
+reopen and un-ignore restoring without a re-run; export never disabled.
+
+Verified in a real browser: a 2.32:1 heading reported with its ratio, its 3:1 large-text
+threshold and a suggested #919191; **Go to block** selecting and scrolling to it with the
+drawer still open; Ignore dropping the badge from `1 error, 1 warning` to `0 errors, 1 warning`
+and surviving a reload via `email-builder:ignored:v1`; the unsubscribe warning with the footer
+off; typing a readable hex clearing the error live with no reload; and the export dialog
+agreeing at `1 warning` with Copy and Download both enabled and no `Gmail clips` string left.

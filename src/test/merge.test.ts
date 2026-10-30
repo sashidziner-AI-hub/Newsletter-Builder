@@ -15,7 +15,7 @@ import {
 import { resolveForOutput } from '../lib/output';
 import { PRESETS } from '../lib/presets';
 import { renderDesign } from '../lib/render';
-import { auditImageSources } from '../lib/audit';
+import { checkDesign } from '../lib/checks';
 import type { Block, Design, MergeFormat } from '../types';
 
 type BlockOf<T extends Block['type']> = Extract<Block, { type: T }>;
@@ -134,11 +134,18 @@ describe('tag detection', () => {
 
   it('never reports a merge tag as a broken or insecure link', () => {
     const footer = mk('footer');
-    const html = exportHtml(designWith([footer]));
+    const design = designWith([footer]);
+    const html = exportHtml(design);
     expect(html).toContain('href="{{unsubscribe_url}}"');
-    // the image audit is the thing that flags bad URLs, and it stays clean
-    const audit = auditImageSources(html);
-    expect(audit.insecure).toEqual([]);
+
+    // the engine takes the RESOLVED design, the same as the export pipeline:
+    // an unresolved brand.logo token is not a URL it could judge
+    const resolved = resolveForOutput(design, vee, 'export').design;
+    const codes = checkDesign(resolved, html, vee).map((i) => i.code);
+    expect(codes).not.toContain('LINK_RELATIVE');
+    expect(codes).not.toContain('LINK_EMPTY');
+    expect(codes).not.toContain('IMAGE_NOT_HTTPS');
+    expect(codes).not.toContain('UNSUBSCRIBE_MISSING');
   });
 });
 

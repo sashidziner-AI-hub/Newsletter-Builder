@@ -5,6 +5,9 @@ import type { Block, BlockType, Brand, Design, Device, Row, Selection, BodySetti
 import type { SavedBlock } from './lib/blocks-library';
 import { instantiate, makeSavedBlock } from './lib/blocks-library';
 import { shouldSnapshot, type SnapshotReason } from './lib/versions';
+import { type Issue, checkDesign } from './lib/checks';
+import { resolveForOutput } from './lib/output';
+import { renderDesign } from './lib/render';
 import { imageStorage, type LibraryImage } from './lib/image-storage';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
@@ -15,8 +18,10 @@ import {
   addVersion,
   listBrands,
   listSavedBlocks,
+  listIgnored,
   listVersions,
   loadSampleData,
+  saveIgnored,
   saveBrands,
   saveEmail,
   saveLastEmailId,
@@ -60,6 +65,23 @@ interface EditorState {
   updateImage: (id: string, patch: Partial<LibraryImage>) => void;
   removeImage: (id: string) => void;
   /** when the last automatic version snapshot was taken, for the 5-minute throttle */
+
+  /**
+   * Quality checks. `issues` is everything the engine found on the last run,
+   * ignored ones included, so un-ignoring needs no re-run. Nothing here ever
+   * blocks an edit or an export — it only informs.
+   */
+  issues: Issue[];
+  /** issue ids dismissed for this email, persisted with it */
+  ignoredIssues: string[];
+  /** image load results probed this session, keyed by URL */
+  imageStatus: Record<string, 'ok' | 'broken'>;
+  checksOpen: boolean;
+  runChecks: () => void;
+  ignoreIssue: (id: string) => void;
+  unignoreIssue: (id: string) => void;
+  setChecksOpen: (open: boolean) => void;
+  setImageStatus: (statuses: Record<string, 'ok' | 'broken'>) => void;
 
   openEmail: (record: SavedTemplate) => void;
   startNewEmail: (design: Design) => void;
@@ -169,6 +191,10 @@ export const useEditor = create<EditorState>((set, get) => {
     saveState: { status: 'idle', at: 0, message: '' },
     savedBlocks: listSavedBlocks(),
     images: imageStorage.list(),
+    issues: [],
+    ignoredIssues: [],
+    imageStatus: {},
+    checksOpen: false,
     past: [],
     future: [],
     selection: { kind: 'body' },
@@ -178,6 +204,49 @@ export const useEditor = create<EditorState>((set, get) => {
 
     select: (selection) => set({ selection }),
     setDevice: (device) => set({ device }),
+
+    setChecksOpen: (checksOpen) => set({ checksOpen }),
+
+    setImageStatus: (statuses) => {
+      set({ imageStatus: { ...get().imageStatus, ...statuses } });
+      get().runChecks();
+    },
+
+    /**
+     * Run the engine over what would actually be sent: the resolved design and
+     * the real exported HTML, exactly as the export dialog builds them.
+     */
+    runChecks: () => {
+      const { design, brands, images, imageStatus } = get();
+      const brand = resolveBrand(brands, design.brandId);
+      const out = resolveForOutput(design, brand, 'export');
+
+      // the library already knows what it has probed and how big each image is;
+      // an unprobed URL stays absent, so it is never called broken
+      const loadStatus = new Map<string, 'ok' | 'broken'>();
+      const imageWidths = new Map<string, number>();
+      for (const image of images) {
+        if (image.status !== 'unknown') loadStatus.set(image.url, image.status);
+        if (image.width > 0) imageWidths.set(image.url, image.width);
+      }
+      for (const [url, status] of Object.entries(imageStatus)) loadStatus.set(url, status);
+
+      set({ issues: checkDesign(out.design, renderDesign(out.design), brand, { loadStatus, imageWidths }) });
+    },
+
+    ignoreIssue: (id) => {
+      const { ignoredIssues, currentEmailId } = get();
+      if (ignoredIssues.includes(id)) return;
+      const next = [...ignoredIssues, id];
+      set({ ignoredIssues: next });
+      saveIgnored(currentEmailId, next);
+    },
+
+    unignoreIssue: (id) => {
+      const next = get().ignoredIssues.filter((i) => i !== id);
+      set({ ignoredIssues: next });
+      saveIgnored(get().currentEmailId, next);
+    },
 
     /** Open a saved record for editing. Auto-save then updates it in place. */
     openEmail: (record) => {
@@ -191,6 +260,9 @@ export const useEditor = create<EditorState>((set, get) => {
         selection: { kind: 'body' },
         lastCoalesce: null,
         revision: get().revision + 1,
+        // the dismissed warnings belong to this email, not the one just closed
+        issues: [],
+        ignoredIssues: listIgnored(record.id),
       });
       saveLastEmailId(record.id);
     },
@@ -210,6 +282,8 @@ export const useEditor = create<EditorState>((set, get) => {
         selection: { kind: 'body' },
         lastCoalesce: null,
         revision: get().revision + 1,
+        issues: [],
+        ignoredIssues: [],
       });
       saveLastEmailId(null);
     },
@@ -230,7 +304,12 @@ export const useEditor = create<EditorState>((set, get) => {
         });
         return;
       }
-      if (!currentEmailId) saveLastEmailId(entry.id);
+      if (!currentEmailId) {
+        saveLastEmailId(entry.id);
+        // anything dismissed before the record existed now has somewhere to live
+        const ignored = get().ignoredIssues;
+        if (ignored.length > 0) saveIgnored(entry.id, ignored);
+      }
       set({
         currentEmailId: entry.id,
         dirty: false,
@@ -654,6 +733,23 @@ export function useActiveBrand(): Brand {
 export function useAccessibleBrands(): Brand[] {
   const brands = useEditor((s) => s.brands);
   return useMemo(() => getAccessibleBrands(null, brands), [brands]);
+}
+
+/**
+ * Issues the user has not dismissed — what the badge and the drawer show. The
+ * ignored ones stay in the store so they can be brought back without a re-run.
+ */
+export function useVisibleIssues(): Issue[] {
+  const issues = useEditor((s) => s.issues);
+  const ignored = useEditor((s) => s.ignoredIssues);
+  return useMemo(() => issues.filter((i) => !ignored.includes(i.id)), [issues, ignored]);
+}
+
+/** The ignored ones, for the drawer's un-ignore list. */
+export function useIgnoredIssues(): Issue[] {
+  const issues = useEditor((s) => s.issues);
+  const ignored = useEditor((s) => s.ignoredIssues);
+  return useMemo(() => issues.filter((i) => ignored.includes(i.id)), [issues, ignored]);
 }
 
 /**

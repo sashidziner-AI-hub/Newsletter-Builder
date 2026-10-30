@@ -8,7 +8,8 @@ import {
   resolveToken,
   veeBrand,
 } from '../lib/brand';
-import { auditImageSources } from '../lib/audit';
+import { isPlaceholderImage } from '../lib/audit';
+import { checkDesign } from '../lib/checks';
 import { createBlock, createRow, emptyDesign } from '../lib/defaults';
 import { normalizeDesign } from '../lib/design-ops';
 import { renderDesign } from '../lib/render';
@@ -186,15 +187,37 @@ describe('export output', () => {
   });
 });
 
-describe('auditImageSources', () => {
+describe('image rules, now owned by the checks engine', () => {
+  /** Put one image in an email and read back the codes the engine reports. */
+  const codesFor = (src: string, alt = 'Something') => {
+    const design = emptyDesign();
+    const row = createRow([1]);
+    const image = mk('image');
+    image.values.src = src;
+    image.values.alt = alt;
+    row.columns[0].blocks = [image];
+    design.rows.push(row);
+    return checkDesign(design, '', vee).map((i) => i.code);
+  };
+
   it('flags embedded and non-https sources, and passes clean https', () => {
-    expect(auditImageSources('<img src="https://x.test/a.png" />').ok).toBe(true);
-    expect(auditImageSources('<img src="data:image/png;base64,AA" />').embedded).toBe(1);
-    expect(auditImageSources('<img src="http://x.test/a.png" />').insecure).toEqual([
-      'http://x.test/a.png',
-    ]);
+    expect(codesFor('https://x.test/a.png')).not.toContain('IMAGE_NOT_HTTPS');
+    expect(codesFor('data:image/png;base64,AA')).toContain('IMAGE_EMBEDDED');
+    expect(codesFor('http://x.test/a.png')).toContain('IMAGE_NOT_HTTPS');
     // merge tags are resolved by the ESP, so they are not a problem
-    expect(auditImageSources('<img src="{{logo_url}}" />').ok).toBe(true);
+    expect(codesFor('{{logo_url}}')).not.toContain('IMAGE_NOT_HTTPS');
+    expect(codesFor('{{logo_url}}')).not.toContain('IMAGE_EMBEDDED');
+  });
+
+  it('still knows a placeholder host when it sees one', () => {
+    expect(isPlaceholderImage('https://picsum.photos/seed/x/600/300')).toBe(true);
+    expect(isPlaceholderImage('https://cdn.example.com/real.jpg')).toBe(false);
+    expect(codesFor('https://picsum.photos/seed/x/600/300')).toContain('IMAGE_PLACEHOLDER');
+  });
+
+  it('flags a missing alt', () => {
+    expect(codesFor('https://x.test/a.png', '')).toContain('IMAGE_MISSING_ALT');
+    expect(codesFor('https://x.test/a.png', 'Described')).not.toContain('IMAGE_MISSING_ALT');
   });
 });
 

@@ -1,14 +1,13 @@
 import type { Block, Design } from '../types';
-import { isPlaceholderImage } from './audit';
 
 /**
- * Image checks over the **design**, not the rendered HTML.
+ * Where the images are.
  *
- * 1A's `auditImageSources()` regexes `<img src>` out of the output, which is
- * fine for a count but cannot say which block an image belongs to — and it
- * misses the hero background entirely, because that renders as
- * `<td background="…">` rather than an `<img>`. Walking the design instead
- * gives every finding a block to jump to, and covers all twelve image fields.
+ * Walking the **design** rather than the rendered HTML gives every image a
+ * block to jump to, and covers the hero background, which renders as
+ * `<td background="…">` rather than an `<img>` and so cannot be found in the
+ * output at all. The rules that judge what this finds live in
+ * `src/lib/checks.ts`; this file only reports what is there.
  */
 
 export interface ImageUse {
@@ -25,34 +24,6 @@ export interface ImageUse {
   /** rendered width in px, used for the retina note */
   displayWidth: number;
 }
-
-export type ImageProblemKind =
-  | 'not-https'
-  | 'missing-alt'
-  | 'placeholder'
-  | 'embedded'
-  | 'broken';
-
-export interface ImageProblem {
-  kind: ImageProblemKind;
-  use: ImageUse;
-}
-
-export const PROBLEM_LABEL: Record<ImageProblemKind, string> = {
-  'not-https': 'Not served over https',
-  'missing-alt': 'Missing alt text',
-  placeholder: 'Still a placeholder image',
-  embedded: 'Embedded data: image',
-  broken: 'Could not be loaded',
-};
-
-export const PROBLEM_HELP: Record<ImageProblemKind, string> = {
-  'not-https': 'Most inboxes block images that are not https. Host it over https.',
-  'missing-alt': 'Inboxes block images by default, so alt text is what the reader sees.',
-  placeholder: 'Stock art from a preset or a new block. Swap in the real image.',
-  embedded: 'Gmail and most clients strip data: images. Host the file and paste its URL.',
-  broken: 'The URL did not load. Check it is public and still there.',
-};
 
 /** Every image-bearing field in the design, with somewhere to jump to. */
 export function collectImages(design: Design): ImageUse[] {
@@ -146,44 +117,6 @@ export function collectImages(design: Design): ImageUse[] {
     }
   }
   return uses;
-}
-
-/** A merge tag is resolved by the ESP, so it is not a broken URL. */
-const isMergeTag = (url: string) => /^(\{\{|\*\||\[%)/.test(url.trim());
-
-/**
- * Classify each use. `loadStatus` is only consulted for URLs that have actually
- * been probed — an unchecked image is never reported as broken.
- */
-export function auditDesignImages(
-  uses: ImageUse[],
-  loadStatus?: Map<string, 'ok' | 'broken'>,
-): ImageProblem[] {
-  const problems: ImageProblem[] = [];
-  for (const use of uses) {
-    const url = use.url;
-    if (isMergeTag(url)) continue;
-
-    if (/^data:/i.test(url)) problems.push({ kind: 'embedded', use });
-    else if (!/^https:\/\//i.test(url)) problems.push({ kind: 'not-https', use });
-    else if (loadStatus?.get(url) === 'broken') problems.push({ kind: 'broken', use });
-
-    if (isPlaceholderImage(url)) problems.push({ kind: 'placeholder', use });
-    // alt is only required where the field actually has one
-    if (use.alt !== null && !use.alt.trim()) problems.push({ kind: 'missing-alt', use });
-  }
-  return problems;
-}
-
-export function groupProblems(problems: ImageProblem[]): [ImageProblemKind, ImageProblem[]][] {
-  const order: ImageProblemKind[] = ['broken', 'embedded', 'not-https', 'missing-alt', 'placeholder'];
-  const groups = new Map<ImageProblemKind, ImageProblem[]>();
-  for (const p of problems) {
-    const bucket = groups.get(p.kind);
-    if (bucket) bucket.push(p);
-    else groups.set(p.kind, [p]);
-  }
-  return order.filter((k) => groups.has(k)).map((k) => [k, groups.get(k)!]);
 }
 
 /* ------------------------------------------------------- resolution notes */

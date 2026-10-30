@@ -7,6 +7,7 @@ import { DndShell } from './components/dnd';
 import { LeftPanel } from './components/LeftPanel';
 import { Canvas } from './components/Canvas';
 import { RightPanel } from './components/RightPanel';
+import { ChecksPanel } from './components/ChecksPanel';
 import { TopBar } from './components/TopBar';
 import { ExportHtmlModal, PreviewModal, TemplatesModal } from './components/Modals';
 import { HistoryModal } from './components/HistoryModal';
@@ -85,6 +86,29 @@ function Editor() {
     };
   }, []);
 
+  /**
+   * Quality checks, debounced so typing stays smooth. Unlike auto-save this
+   * also runs on a whole-design load: a badge that stayed empty until the first
+   * edit would be lying about the email you just opened.
+   */
+  useEffect(() => {
+    let timer = 0;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => useEditor.getState().runChecks(), 500);
+    };
+    schedule();
+    const unsub = useEditor.subscribe((state, prev) => {
+      // editing a brand re-themes the email without touching the design
+      if (state.design === prev.design && state.brands === prev.brands) return;
+      schedule();
+    });
+    return () => {
+      unsub();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   // a tab closed mid-debounce still keeps the work
   useEffect(() => {
     const flush = () => {
@@ -142,6 +166,7 @@ function Editor() {
           <Canvas />
         </DndShell>
         <RightPanel onSaveAsBlock={(kind, payload) => setSaveBlock({ kind, payload })} />
+        <ChecksPanel />
       </div>
 
       {modal === 'preview' && <PreviewModal onClose={() => setModal(null)} />}

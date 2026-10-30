@@ -21,6 +21,7 @@ const BLOCKS_KEY = 'email-builder:blocks:v1';
 const VERSIONS_KEY = 'email-builder:versions:v1';
 const SESSION_KEY = 'email-builder:session:v1';
 const IMAGES_KEY = 'email-builder:images:v1';
+const IGNORED_KEY = 'email-builder:ignored:v1';
 
 /**
  * Stamped on every record this module writes. Records without it were written
@@ -228,11 +229,12 @@ export function deleteTemplate(id: string): void {
     TEMPLATES_KEY,
     listTemplates().filter((t) => t.id !== id),
   );
-  // its history goes with it
+  // its history and its dismissed warnings go with it
   writeSafe(
     VERSIONS_KEY,
     listVersions().filter((v) => v.emailId !== id),
   );
+  saveIgnored(id, []);
 }
 
 /* -------------------------------------------------------------------- brands */
@@ -406,4 +408,29 @@ export function listImages(): LibraryImage[] {
 
 export function saveImages(images: LibraryImage[]): WriteResult {
   return writeSafe(IMAGES_KEY, images);
+}
+
+/* --------------------------------------------------------- ignored issues */
+
+/**
+ * Issue ids the user has dismissed, kept per email: a warning waved away on one
+ * newsletter must still be raised on the next. Unknown ids are harmless — an
+ * issue that no longer exists simply never matches.
+ */
+export function listIgnored(emailId: string | null): string[] {
+  if (!emailId) return [];
+  const raw = read<{ byEmail?: Record<string, unknown> }>(IGNORED_KEY);
+  const list = raw?.byEmail?.[emailId];
+  return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : [];
+}
+
+export function saveIgnored(emailId: string | null, ids: string[]): WriteResult {
+  // an email with no record yet has nowhere to put these; the store flushes
+  // them as soon as auto-save mints its id
+  if (!emailId) return 'ok';
+  const raw = read<{ byEmail?: Record<string, string[]> }>(IGNORED_KEY);
+  const byEmail: Record<string, string[]> = { ...(raw?.byEmail ?? {}) };
+  if (ids.length > 0) byEmail[emailId] = ids;
+  else delete byEmail[emailId];
+  return writeSafe(IGNORED_KEY, { byEmail, schemaVersion: SCHEMA_VERSION });
 }
