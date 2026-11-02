@@ -171,9 +171,13 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
         <ImageUrlField
           label="Image URL"
           value={isData ? '' : v.src}
-          onChange={(src) => set({ src })}
+          // typing a real URL retires the draft, which is also what the
+          // "Replace image" quick action in Checks drives
+          onChange={(src) => set({ src, aiDraftId: undefined })}
           onPickAlt={(alt) => set({ alt })}
           displayWidth={Math.round((600 * v.width) / 100)}
+          altSeed={v.alt}
+          onGenerated={({ draftId, alt }) => set({ src: '', alt, aiDraftId: draftId })}
           hint={
             isData
               ? 'This block still holds an embedded image, which Gmail and many inboxes strip. Paste a hosted https URL to replace it.'
@@ -721,6 +725,7 @@ function ImageFields({
   onSrc,
   onAlt,
   displayWidth,
+  onGenerated,
 }: {
   label?: string;
   src: string;
@@ -729,6 +734,12 @@ function ImageFields({
   onAlt: (v: string) => void;
   /** rendered width in px, for the resolution note */
   displayWidth?: number;
+  /**
+   * 5A: supplied by the fields in scope. Absent means no "Generate with AI"
+   * button, which is how the Footer logo and the fields without alt stay as
+   * they were. A 4A block using this component only has to pass it.
+   */
+  onGenerated?: (result: { draftId: string; alt: string }) => void;
 }) {
   const missing = !alt.trim();
   return (
@@ -739,6 +750,8 @@ function ImageFields({
         onChange={onSrc}
         onPickAlt={onAlt}
         displayWidth={displayWidth}
+        onGenerated={onGenerated}
+        altSeed={alt}
       />
       <div>
         <span className="mb-1 block text-xs font-medium text-slate-600">
@@ -893,8 +906,11 @@ export function HeaderEditor({
             label="Logo"
             src={v.logoSrc}
             alt={v.logoAlt}
-            onSrc={(logoSrc) => set({ logoSrc })}
+            onSrc={(logoSrc) => set({ logoSrc, aiDraftId: undefined })}
             onAlt={(logoAlt) => set({ logoAlt })}
+            onGenerated={({ draftId, alt }) =>
+              set({ logoSrc: '', logoAlt: alt, aiDraftId: draftId })
+            }
           />
         )}
         <NumberField label="Logo width" unit="px" min={40} max={400} value={v.logoWidth} onChange={(logoWidth) => set({ logoWidth })} />
@@ -1042,8 +1058,11 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
           <ImageFields
             src={v.imageSrc}
             alt={v.imageAlt}
-            onSrc={(imageSrc) => set({ imageSrc })}
+            onSrc={(imageSrc) => set({ imageSrc, aiDraftId: undefined })}
             onAlt={(imageAlt) => set({ imageAlt })}
+            onGenerated={({ draftId, alt }) =>
+              set({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+            }
           />
         </Section>
       )}
@@ -1076,8 +1095,11 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
                   label="Card image"
                   src={item.imageSrc}
                   alt={item.imageAlt}
-                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onSrc={(imageSrc) => patch({ imageSrc, aiDraftId: undefined })}
                   onAlt={(imageAlt) => patch({ imageAlt })}
+                  onGenerated={({ draftId, alt }) =>
+                    patch({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+                  }
                 />
                 <input
                   aria-label="Card link label"
@@ -1237,8 +1259,11 @@ export function ArticleListEditor({ block, set }: EditorProps<'articles', Articl
                   label="Thumbnail"
                   src={item.imageSrc}
                   alt={item.imageAlt}
-                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onSrc={(imageSrc) => patch({ imageSrc, aiDraftId: undefined })}
                   onAlt={(imageAlt) => patch({ imageAlt })}
+                  onGenerated={({ draftId, alt }) =>
+                    patch({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+                  }
                 />
               )}
               <input

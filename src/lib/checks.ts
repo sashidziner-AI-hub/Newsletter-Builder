@@ -16,6 +16,13 @@ import { collectImages, type ImageUse } from './image-audit';
 
 export type Severity = 'error' | 'warning' | 'info';
 
+/** 5A: the five holders that can carry an `aiDraftId`, and the field it stands for. */
+const AI_DRAFT_FIELDS: { field: string; label: string }[] = [
+  { field: 'src', label: 'Image' },
+  { field: 'imageSrc', label: 'Image' },
+  { field: 'logoSrc', label: 'Logo' },
+];
+
 export interface Issue {
   /** stable across runs: the same problem keeps the same id */
   id: string;
@@ -27,6 +34,11 @@ export interface Issue {
   blockId?: string;
   /** set for email-level problems, naming the settings field to focus */
   field?: 'title' | 'preheader' | 'footer';
+  /**
+   * 5A: a labelled jump, for issues where "Go to block" undersells what to do
+   * next. It selects the same block; only the wording changes.
+   */
+  action?: string;
 }
 
 export interface CheckOptions {
@@ -43,6 +55,12 @@ export interface CheckOptions {
   darkDesign?: Design;
   /** how many bytes the dark machinery added to the exported HTML */
   darkOverheadBytes?: number;
+  /**
+   * 5A: the AI draft ids this browser actually holds. Absent means "we have
+   * not looked", and an unexamined draft is never called missing — the same
+   * rule the broken-image check follows.
+   */
+  knownDrafts?: Set<string>;
 }
 
 const KB = 1024;
@@ -576,6 +594,58 @@ export function checkDesign(
         message: `Dark mode support adds ${overheadKb.toFixed(1)} KB to this email.`,
         hint: 'Most of that is per-block colour rules. Leaning on the brand palette instead of per-block overrides keeps it smaller.',
       });
+    }
+  }
+
+  /* ---- AI DRAFTS (5A) */
+  for (const row of design.rows) {
+    for (const col of row.columns) {
+      for (const block of col.blocks) {
+        // a holder is the block's own values plus any item/card array under it
+        const holders: Record<string, unknown>[] = [
+          block.values as unknown as Record<string, unknown>,
+        ];
+        for (const key of ['items', 'cards']) {
+          const arr = (block.values as unknown as Record<string, unknown>)[key];
+          if (Array.isArray(arr)) {
+            for (const item of arr) {
+              if (item && typeof item === 'object') holders.push(item as Record<string, unknown>);
+            }
+          }
+        }
+
+        holders.forEach((holder, n) => {
+          const draftId = holder.aiDraftId;
+          if (typeof draftId !== 'string' || !draftId.trim()) return;
+          const label = AI_DRAFT_FIELDS.find((f) => typeof holder[f.field] === 'string')?.label ?? 'Image';
+          const where = n === 0 ? label : `${label} ${n}`;
+
+          // a draft this browser does not hold cannot be recovered from here
+          const missing = opts.knownDrafts ? !opts.knownDrafts.has(draftId) : false;
+          if (missing) {
+            add({
+              id: id('AI_IMAGE_MISSING_DRAFT', block.id, `${where}#${draftId}`),
+              code: 'AI_IMAGE_MISSING_DRAFT',
+              severity: 'error',
+              message: `${where} is a generated draft that is not in this browser.`,
+              hint: 'Draft images live only on the machine that made them, so an imported design or a saved block arrives without them. Replace it with a hosted image URL.',
+              blockId: block.id,
+              action: 'Replace image',
+            });
+            return;
+          }
+
+          add({
+            id: id('AI_IMAGE_NOT_HOSTED', block.id, `${where}#${draftId}`),
+            code: 'AI_IMAGE_NOT_HOSTED',
+            severity: 'error',
+            message: `${where} is a generated draft and is not hosted anywhere.`,
+            hint: 'Download the PNG, upload it to your image hosting, then paste the URL here. The export ships a placeholder until you do.',
+            blockId: block.id,
+            action: 'Replace with hosted URL',
+          });
+        });
+      }
     }
   }
 

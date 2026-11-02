@@ -42,6 +42,40 @@ export interface ImageStorage {
   upload?(file: File): Promise<string>;
 }
 
+/**
+ * Where a generated image would be published (5A).
+ *
+ * Declared, not implemented. Until an adapter exists `configured` is false and
+ * `upload()` refuses, which is what puts a generated image into the local-draft
+ * path instead. When a real host is wired up, the only change is a module that
+ * satisfies this and returns an https URL.
+ */
+export interface ImageHosting {
+  readonly id: string;
+  readonly configured: boolean;
+  /** must resolve to a public https URL; never a data: or blob: URI */
+  upload(blob: Blob, name: string): Promise<string>;
+}
+
+export const HOSTING_UNAVAILABLE =
+  'No image hosting is configured, so this image stays a local draft.';
+
+export class HostingUnavailableError extends Error {
+  constructor() {
+    super(HOSTING_UNAVAILABLE);
+    this.name = 'HostingUnavailableError';
+  }
+}
+
+/** The only hosting there is for now. */
+export const imageHosting: ImageHosting = {
+  id: 'none',
+  configured: false,
+  async upload() {
+    throw new HostingUnavailableError();
+  },
+};
+
 export const IMAGE_SCHEMA = 2;
 
 export const UPLOAD_UNAVAILABLE =

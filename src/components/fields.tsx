@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Braces, ChevronDown, Image as ImageIcon, Link2, Link2Off, Plus, X } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Braces, ChevronDown, Image as ImageIcon, Link2, Link2Off, Plus, Sparkles, X } from 'lucide-react';
 import type { Align, BrandColors, Padding } from '../types';
 import { isBrandToken, resolveToken, tokenLabel } from '../lib/brand';
 import { isMergeTagOnly, MERGE_TAGS } from '../lib/merge';
@@ -318,6 +318,30 @@ export function registerImagePicker(fn: PickerOpener | null) {
 }
 
 /**
+ * 5A: the same hole again, for the AI panel. The field knows how to write
+ * itself, so it hands that down rather than the panel learning the shape of
+ * every block.
+ */
+export interface AiTarget {
+  /** what the image is for, shown as the panel's subtitle */
+  label: string;
+  /** rendered width in px, for the "Match block width" option */
+  blockWidth: number;
+  /** a prompt seed, usually whatever alt text is already there */
+  seed: string;
+  onUse: (result: { draftId: string; alt: string }) => void;
+}
+
+type AiOpener = (target: AiTarget) => void;
+
+let openAiImpl: AiOpener | null = null;
+export function registerAiPanel(fn: AiOpener | null) {
+  openAiImpl = fn;
+}
+
+export const aiAvailable = () => openAiImpl !== null;
+
+/**
  * A URL field for an image, with the library picker beside it.
  *
  * Alt text stays the caller's business — the composite blocks mark it required
@@ -331,12 +355,22 @@ export function ImageUrlField({
   onPickAlt,
   displayWidth,
   hint,
+  onGenerated,
+  altSeed = '',
 }: {
   label?: string;
   value: string;
   onChange: (v: string) => void;
   /** called with the library default alt when one is picked */
   onPickAlt?: (alt: string) => void;
+  /**
+   * 5A: supplied by fields that can hold a generated draft. Absent means this
+   * field shows no "Generate with AI" button — which is how the fields out of
+   * 5A's scope stay exactly as they are.
+   */
+  onGenerated?: (result: { draftId: string; alt: string }) => void;
+  /** existing alt text, used to seed the prompt */
+  altSeed?: string;
   /** rendered width in px, for the resolution note */
   displayWidth?: number;
   hint?: string;
@@ -385,13 +419,31 @@ export function ImageUrlField({
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-slate-600">{label}</span>
-        <button
-          type="button"
-          onClick={pick}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
-        >
-          <ImageIcon size={12} /> Choose from library
-        </button>
+        <span className="flex items-center gap-1">
+          {onGenerated && aiAvailable() && (
+            <button
+              type="button"
+              onClick={() =>
+                openAiImpl?.({
+                  label,
+                  blockWidth: displayWidth ?? 600,
+                  seed: altSeed,
+                  onUse: onGenerated,
+                })
+              }
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+            >
+              <Sparkles size={12} /> Generate with AI
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={pick}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-brand-50"
+          >
+            <ImageIcon size={12} /> Choose from library
+          </button>
+        </span>
       </div>
 
       <input

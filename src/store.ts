@@ -9,6 +9,7 @@ import { type Issue, byteLength, checkDesign } from './lib/checks';
 import { darkRenderOpts, darkResolved, resolveForOutput } from './lib/output';
 import { renderDesign } from './lib/render';
 import { imageStorage, type LibraryImage } from './lib/image-storage';
+import { draftStore } from './lib/drafts';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
@@ -80,6 +81,13 @@ interface EditorState {
   /** image load results probed this session, keyed by URL */
   imageStatus: Record<string, 'ok' | 'broken'>;
   checksOpen: boolean;
+  /**
+   * 5A: AI draft ids this browser holds. Empty until `refreshDrafts()` has
+   * run, and the engine treats "not looked yet" as "do not accuse".
+   */
+  knownDrafts: string[];
+  draftsChecked: boolean;
+  refreshDrafts: () => Promise<void>;
   runChecks: () => void;
   ignoreIssue: (id: string) => void;
   unignoreIssue: (id: string) => void;
@@ -198,6 +206,8 @@ export const useEditor = create<EditorState>((set, get) => {
     ignoredIssues: [],
     imageStatus: {},
     checksOpen: false,
+    knownDrafts: [],
+    draftsChecked: false,
     past: [],
     future: [],
     selection: { kind: 'body' },
@@ -214,6 +224,18 @@ export const useEditor = create<EditorState>((set, get) => {
 
     setImageStatus: (statuses) => {
       set({ imageStatus: { ...get().imageStatus, ...statuses } });
+      get().runChecks();
+    },
+
+    /** Which drafts exist locally, so a missing one can be told apart. */
+    refreshDrafts: async () => {
+      try {
+        const keys = await draftStore.keys();
+        set({ knownDrafts: keys, draftsChecked: true });
+      } catch {
+        // an unreadable store is "we have not looked", not "nothing is there"
+        set({ draftsChecked: false });
+      }
       get().runChecks();
     },
 
@@ -247,8 +269,17 @@ export const useEditor = create<EditorState>((set, get) => {
           }
         : {};
 
+      // only pass the draft set once it has actually been read
+      const { knownDrafts, draftsChecked } = get();
+      const drafts = draftsChecked ? { knownDrafts: new Set(knownDrafts) } : {};
+
       set({
-        issues: checkDesign(out.design, html, brand, { loadStatus, imageWidths, ...dark }),
+        issues: checkDesign(out.design, html, brand, {
+          loadStatus,
+          imageWidths,
+          ...dark,
+          ...drafts,
+        }),
       });
     },
 

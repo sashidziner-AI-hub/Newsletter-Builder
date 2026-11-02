@@ -29,6 +29,8 @@ const SEVERITY_STYLE: Record<Severity, { text: string; chip: string; icon: typeo
 
 /** Where an issue sends you. Email-level ones open the email settings. */
 function destinationLabel(issue: Issue): string | null {
+  // a quick action is still a jump to the block; it just says what to do there
+  if (issue.action) return issue.action;
   if (issue.blockId) return 'Go to block';
   if (issue.field) return 'Email settings';
   return null;

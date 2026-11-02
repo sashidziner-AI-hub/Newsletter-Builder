@@ -889,3 +889,118 @@ label and orange links; switching back to Light giving byte-for-byte the same 19
 document as before; the export carrying both meta tags and `[data-ogsc]` with dark on and
 **none** of it with dark off (17,626 characters, no `dm-` anywhere); and a brand with a light
 logo and no dark one raising `DARK_NO_LOGO` in the drawer with its hint.
+
+## Feature 5A — AI image generation (bring-your-own key) — done (2026-11-02)
+
+### The gate, checked before anything was written
+
+The brief said to verify browser-callability and stop rather than build a proxy. An
+unauthenticated CORS preflight against the real endpoint settled it:
+
+```
+OPTIONS https://api.openai.com/v1/images/generations
+access-control-allow-origin: *
+access-control-allow-methods: DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT
+access-control-allow-headers: authorization,content-type
+```
+
+`GET /v1/models` answers the same way, which is what makes a free **Test connection**
+possible without generating a billable image. Two consequences the adapter is built around:
+the allow-list is *exactly* `authorization,content-type`, so an `OpenAI-Organization` or any
+telemetry header would fail the preflight and none is sent; and the GPT image models always
+return base64 (`data[].b64_json`), so there is no second cross-origin fetch of a returned URL.
+
+**`gpt-image-1` no longer exists.** The current spec-generated SDK enumerates
+`gpt-image-1-mini`, `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2.5-sunburst`,
+`gpt-image-2.5-flare` and `chatgpt-image-latest`. The dropdown ships that list and defaults to
+`gpt-image-1-mini`, the cheapest, because the panel invites regeneration on someone's own card.
+
+### Where the key lives, and where it provably does not
+
+Module memory by default; it dies with the tab. **Remember on this device** is opt-in and
+writes `email-builder:aikey:v1` through 2B's `writeSafe()` — one key, so there is one place to
+look and one thing for **Remove key** to clear. Unticking the box deletes the stored copy
+rather than leaving it behind.
+
+The key is deliberately **not in the zustand store**. Everything in that store is a candidate
+for serialisation — designs, brands, saved blocks, version snapshots all round-trip through
+JSON — so a key that is never in the store cannot be written out by a future feature that
+forgets this rule exists. A test sweeps every surface (design, brands, saved blocks, image
+library, issues, rendered export, every localStorage entry, and `document.body.textContent`)
+after a full generate-and-use run.
+
+Provider error bodies are read for classification only. A provider is free to echo the request
+back in an error, so nothing from the body reaches a message — there is a test that feeds back
+`key sk-… is invalid` and asserts neither `message` nor `detail` contains it.
+
+### The response is untrusted input
+
+`validate.ts` is the only path bytes may take in: PNG, JPEG or WebP by **magic bytes**, never
+by the declared content-type, under 10 MB, and SVG refused outright — it is a document that
+can carry script, not an image. HTML served with a 200 and JSON where an image was promised
+are both rejected with a reason.
+
+### Drafts, and the three rules that follow
+
+There is no image hosting, so `ImageHosting` is declared and `configured: false`. A generated
+image therefore becomes a **local draft**: bytes in IndexedDB, and the design carries only
+`aiDraftId`.
+
+- the design, saved blocks and every JSON export carry the **id only**
+- at the export boundary the id is swapped for `https://placehold.co/600x400?…`, which the 3A
+  engine already recognises, so the existing placeholder warning fires on its own
+- a draft is local to one browser, so **a missing one is a normal state** — an imported design
+  or a saved block from another machine arrives exactly that way
+
+That last point is `AI_IMAGE_MISSING_DRAFT` (error, quick action **Replace image**) beside
+`AI_IMAGE_NOT_HOSTED` (error, quick action **Replace with hosted URL**). Following 2C-1's rule
+that an unexamined thing is never accused, the engine only reports *missing* once
+`refreshDrafts()` has actually read the store. The canvas shows an **AI draft (not hosted)**
+badge, or **Draft image missing**, instead of a broken image.
+
+Typing a real URL into the field clears `aiDraftId`, which is also what the quick action drives.
+
+### Two defects found while building
+
+- **The throttle had a hole.** `setBusy(true)` ran *after* the 2-second gap sleep, so between
+  the click and the request the Regenerate button stayed enabled and a second generation could
+  be queued — breaking "one generation at a time". Busy now goes up first, and `send()` guards
+  on it as well as the button's disabled state.
+- **A test of mine was pathological**, not the code: building a 10 MB base64 payload one
+  `String.fromCharCode` at a time took 5.5 s and tripped the timeout. It allocates directly now.
+
+### Scope
+
+Entry points are the five fields the decision named: Image block, Hero image, Hero cards,
+Article list items, Header logo. They go through the shared `ImageFields` component, so a 4A
+block picks the button up by passing one prop. The Footer logo shares that component and is
+deliberately **not** passed the prop, per "only the image fields that exist now".
+
+### Known gaps
+
+- **No hosting adapter**, so every generated image is a draft and every export of one ships a
+  placeholder. That is the designed end state of 5A, not an omission.
+- **Drafts do not sync.** They are per browser by construction. Sharing a design means hosting
+  the image first.
+- **16:9 and 4:3 have no documented size**, so they are requested as custom `WIDTHxHEIGHT` with
+  a single retry at the nearest documented size if the model refuses. 1:1 and 3:2 map exactly.
+- **The natural size is read from PNG headers only**; JPEG and WebP report 0 and the resolution
+  note stays quiet rather than guessing.
+- **Exposing an API key to a browser is a real trade-off**, which is why the key is
+  session-only by default and the Remember checkbox carries an explicit warning.
+
+### Tests
+
+`src/test/ai.test.ts` (39) and `src/test/ai-ui.test.tsx` (16). Suite: **694 passing**
+(was 639), `tsc --noEmit` clean. No test makes a real API call — `fetch` is stubbed and the
+real adapter runs against it, so the request shape is covered rather than mocked away.
+
+Covered: magic-byte acceptance and the SVG/HTML/JSON/oversize/empty refusals; base64 decode
+and PNG header parsing; the key in memory vs one storage key, unticking Remember, Remove key,
+masking; exactly two headers and never the key in a URL or body; the size map per aspect
+including the custom-size fallback; every error status mapped to its kind; cancel at both the
+provider and the UI; a free key test; the composer gated until saved **and** tested; all four
+result actions, session history, Edit prompt; alt required before use; the brand toggle sending
+only palette hex and never the logo or footer; an id in the design and never bytes; the export
+free of `data:` and `blob:`; `AI_IMAGE_NOT_HOSTED`, `AI_IMAGE_MISSING_DRAFT` on both a design
+import and a saved-block insert, stable ids, and the never-accuse-before-looking rule.

@@ -53,6 +53,13 @@ export interface TextValues {
 
 export interface ImageValues {
   src: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   alt: string;
   href: string;
   /** exclude this link from UTM tagging */
@@ -191,6 +198,12 @@ export interface HeaderValues {
   logoSrc: string;
   logoAlt: string;
   logoWidth: number;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
   /** shown when the logo resolves to nothing — 'brand.name' by default */
   fallbackText: string;
   fallbackColor: string;
@@ -217,6 +230,13 @@ export interface HeaderValues {
 export interface HeroCard {
   id: string;
   imageSrc: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   imageAlt: string;
   title: string;
   text: string;
@@ -239,6 +259,12 @@ export interface HeroValues {
   subtextFontSize: number;
   imageSrc: string;
   imageAlt: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
   ctaLabel: string;
   ctaHref: string;
   ctaNoTrack?: boolean;
@@ -293,6 +319,13 @@ export interface FooterValues {
 export interface ArticleItem {
   id: string;
   imageSrc: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   imageAlt: string;
   title: string;
   excerpt: string;

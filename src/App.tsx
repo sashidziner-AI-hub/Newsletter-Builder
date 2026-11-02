@@ -13,7 +13,8 @@ import { ExportHtmlModal, PreviewModal, TemplatesModal } from './components/Moda
 import { HistoryModal } from './components/HistoryModal';
 import { SaveBlockDialog } from './components/SaveBlockDialog';
 import { ImagePickerModal } from './components/ImageLibrary';
-import { registerImagePicker } from './components/fields';
+import { registerAiPanel, registerImagePicker, type AiTarget } from './components/fields';
+import { AiImagePanel } from './components/AiImagePanel';
 import { BrandsModal } from './components/BrandsModal';
 import { NewEmailModal } from './components/NewEmailModal';
 import { ConfirmProvider, DELETE_BLOCK, DELETE_ROW, useConfirm } from './components/ConfirmDialog';
@@ -41,12 +42,23 @@ function Editor() {
   const [modal, setModal] = useState<ModalName>(null);
   const [saveBlock, setSaveBlock] = useState<SaveBlockTarget>(null);
   const [picker, setPicker] = useState<((image: LibraryImage) => void) | null>(null);
+  // 5A: the AI panel takes the right column in place of the properties panel
+  const [aiTarget, setAiTarget] = useState<AiTarget | null>(null);
 
   // every image field opens the picker through this one hole, so fields.tsx
   // never has to import the library (which itself uses those fields)
   useEffect(() => {
     registerImagePicker(({ onPick }) => setPicker(() => onPick));
-    return () => registerImagePicker(null);
+    registerAiPanel((target) => setAiTarget(target));
+    return () => {
+      registerImagePicker(null);
+      registerAiPanel(null);
+    };
+  }, []);
+
+  // which AI drafts this browser holds, so Checks can tell a missing one apart
+  useEffect(() => {
+    void useEditor.getState().refreshDrafts();
   }, []);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<number>(0);
@@ -165,7 +177,11 @@ function Editor() {
           <LeftPanel notify={notify} />
           <Canvas />
         </DndShell>
-        <RightPanel onSaveAsBlock={(kind, payload) => setSaveBlock({ kind, payload })} />
+        {aiTarget ? (
+          <AiImagePanel target={aiTarget} onBack={() => setAiTarget(null)} />
+        ) : (
+          <RightPanel onSaveAsBlock={(kind, payload) => setSaveBlock({ kind, payload })} />
+        )}
         <ChecksPanel />
       </div>
 

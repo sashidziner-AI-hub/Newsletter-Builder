@@ -67,6 +67,35 @@ const LINK_FIELDS: { url: string; flag: string }[] = [
 /** Nested arrays that hold their own links and text. */
 const ITEM_ARRAYS = ['items', 'navLinks', 'cards', 'socialItems'];
 
+/**
+ * 5A: the URL field an `aiDraftId` stands in for, by the order they appear on
+ * the five holders that can carry one (Image, Hero, Hero card, Article item,
+ * Header logo).
+ */
+const AI_URL_FIELDS = ['src', 'imageSrc', 'logoSrc'] as const;
+
+/**
+ * What an unhosted generated image exports as.
+ *
+ * A draft lives in one browser's IndexedDB, so it cannot ship. Rather than
+ * emit nothing — or, far worse, a `data:` URI — the export substitutes a
+ * placeholder on a host the 3A engine already recognises, so the existing
+ * "placeholder images still in use" warning fires on its own.
+ */
+export const AI_DRAFT_PLACEHOLDER_URL = 'https://placehold.co/600x400?text=AI+image+not+hosted';
+
+/** Swap a draft reference for the placeholder. The id itself is left in place
+ *  so the checks engine can still tell this block apart from a real placeholder. */
+function substituteDraft(holder: Record<string, unknown>): void {
+  if (typeof holder.aiDraftId !== 'string' || !holder.aiDraftId.trim()) return;
+  for (const field of AI_URL_FIELDS) {
+    if (typeof holder[field] === 'string') {
+      holder[field] = AI_DRAFT_PLACEHOLDER_URL;
+      return;
+    }
+  }
+}
+
 export function resolveForOutput(
   design: Design,
   brand: Brand,
@@ -98,6 +127,9 @@ export function resolveForOutput(
 
   const next = produce(branded, (draft) => {
     const visit = (holder: Record<string, unknown>) => {
+      // an unhosted AI draft never leaves this browser as bytes. The canvas
+      // keeps the real image, so this is export-only.
+      if (mode === 'export') substituteDraft(holder);
       // links first, while tags are still canonical
       if (taggingOn) {
         for (const { url, flag } of LINK_FIELDS) {

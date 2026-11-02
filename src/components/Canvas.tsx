@@ -1,9 +1,10 @@
-import { memo, useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import DOMPurify from 'dompurify';
-import { Copy, GripVertical, Trash2 } from 'lucide-react';
+import { Copy, GripVertical, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
 import type { Block, BodySettings, Column, Design, Device, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
+import { draftStore } from '../lib/drafts';
 import { resolvedDesign } from '../lib/output';
 import { columnWidths, renderBlock } from '../lib/render';
 import { useActiveBrand, useEditor, useSampleData } from '../store';
@@ -14,6 +15,93 @@ const MOBILE_WIDTH = 375;
 
 function sanitize(html: string): string {
   return DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+}
+
+/**
+ * 5A: the object URLs for whatever AI drafts a block references.
+ *
+ * The design carries ids, not bytes, so the canvas is where a draft becomes
+ * something an <img> can show. A draft this browser does not hold resolves to
+ * `null`, which is a normal state — an imported design or a saved block from
+ * another machine arrives exactly that way — and the block then says so
+ * instead of rendering a broken image.
+ */
+function useDraftUrls(ids: string[]): Record<string, string | null> {
+  const key = ids.join(',');
+  const [urls, setUrls] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    if (!key) return;
+    let live = true;
+    const made: string[] = [];
+    void (async () => {
+      const next: Record<string, string | null> = {};
+      for (const id of key.split(',')) {
+        const draft = await draftStore.get(id);
+        if (!draft) {
+          next[id] = null;
+          continue;
+        }
+        const url = URL.createObjectURL(draft.blob);
+        made.push(url);
+        next[id] = url;
+      }
+      if (live) setUrls(next);
+      else for (const u of made) URL.revokeObjectURL(u);
+    })();
+    return () => {
+      live = false;
+      for (const u of made) URL.revokeObjectURL(u);
+    };
+  }, [key]);
+
+  return urls;
+}
+
+/** Every `aiDraftId` under a block, including the ones on cards and items. */
+function draftIdsOf(block: Block): string[] {
+  const values = block.values as unknown as Record<string, unknown>;
+  const out: string[] = [];
+  const take = (holder: Record<string, unknown>) => {
+    if (typeof holder.aiDraftId === 'string' && holder.aiDraftId.trim()) out.push(holder.aiDraftId);
+  };
+  take(values);
+  for (const key of ['items', 'cards']) {
+    const arr = values[key];
+    if (Array.isArray(arr)) {
+      for (const item of arr) if (item && typeof item === 'object') take(item as Record<string, unknown>);
+    }
+  }
+  return out;
+}
+
+/** Put the resolved URLs into a copy of the block, for rendering only. */
+function withDraftUrls(block: Block, urls: Record<string, string | null>): Block {
+  const ids = draftIdsOf(block);
+  if (ids.length === 0) return block;
+
+  const clone = JSON.parse(JSON.stringify(block)) as Block;
+  const values = clone.values as unknown as Record<string, unknown>;
+  const fill = (holder: Record<string, unknown>) => {
+    const id = holder.aiDraftId;
+    if (typeof id !== 'string') return;
+    const url = urls[id];
+    if (!url) return;
+    for (const field of ['src', 'imageSrc', 'logoSrc']) {
+      if (typeof holder[field] === 'string') {
+        holder[field] = url;
+        return;
+      }
+    }
+  };
+  fill(values);
+  for (const key of ['items', 'cards']) {
+    const arr = values[key];
+    if (Array.isArray(arr)) {
+      for (const item of arr) if (item && typeof item === 'object') fill(item as Record<string, unknown>);
+    }
+  }
+  return clone;
 }
 
 /* ------------------------------------------------------------------- block */
@@ -53,13 +141,23 @@ const BlockView = memo(function BlockView({
   const drop = useDroppable({ id: block.id, data: { kind: 'block', blockId: block.id, columnId: column.id } });
 
   // Only the properties that affect rendering are dependencies; `body` fields used by the renderer are listed explicitly.
+  const draftIds = useMemo(() => draftIdsOf(block), [block]);
+  const draftUrls = useDraftUrls(draftIds);
+  /** a referenced draft this browser does not hold */
+  const missingDraft = draftIds.some((id) => id in draftUrls && draftUrls[id] === null);
+  const hasDraft = draftIds.length > 0 && !missingDraft;
+
   const html = useMemo(
     () =>
       sanitize(
-        renderBlock(block, { version: 1, brandId: null, body, rows: [] }, { colWidth, editor: true }),
+        renderBlock(
+          withDraftUrls(block, draftUrls),
+          { version: 1, brandId: null, body, rows: [] },
+          { colWidth, editor: true },
+        ),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [block, colWidth, body.fontFamily, body.linkColor, body.textColor],
+    [block, draftUrls, colWidth, body.fontFamily, body.linkColor, body.textColor],
   );
 
   const label = BLOCK_META.find((m) => m.type === block.type)?.label ?? block.type;
@@ -95,6 +193,22 @@ const BlockView = memo(function BlockView({
       {hiddenOnSend && (
         <span className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow">
           Hidden on send
+        </span>
+      )}
+      {hasDraft && (
+        <span
+          title="This image is a local draft. Host it and paste the URL before sending."
+          className="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-1 rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow"
+        >
+          <Sparkles size={10} /> AI draft (not hosted)
+        </span>
+      )}
+      {missingDraft && (
+        <span
+          title="The generated image for this block is not in this browser. Replace it with a hosted URL."
+          className="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow"
+        >
+          <TriangleAlert size={10} /> Draft image missing
         </span>
       )}
       {selected && (
