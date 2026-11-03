@@ -46,6 +46,8 @@ export interface ImageProvider {
  */
 export type AiErrorKind =
   | 'invalid-key'
+  | 'forbidden'
+  | 'no-credit'
   | 'rate-limit'
   | 'content-policy'
   | 'network'
@@ -56,6 +58,8 @@ export type AiErrorKind =
 /** Plain messages. None of these can contain a key, because none interpolate one. */
 const MESSAGES: Record<AiErrorKind, string> = {
   'invalid-key': 'That API key was rejected. Check it and save it again.',
+  forbidden: 'The provider refused this request.',
+  'no-credit': 'No API credits. Add billing credit in your provider account.',
   'rate-limit': 'The provider is rate-limiting this key. Wait a moment and try again.',
   'content-policy': 'The provider refused this prompt on content-policy grounds. Try rewording it.',
   network: 'Could not reach the provider. Check your connection and try again.',
@@ -66,11 +70,17 @@ const MESSAGES: Record<AiErrorKind, string> = {
 
 export class AiError extends Error {
   readonly kind: AiErrorKind;
-  /** extra context for the UI only — never the key, never the raw body */
+  /** a hint shown under the message; never the key, never the raw body */
   readonly detail: string;
 
-  constructor(kind: AiErrorKind, detail = '') {
-    super(MESSAGES[kind]);
+  /**
+   * `message` overrides the default for this kind, which is how a provider's
+   * own wording reaches the user for the cases where it is more useful than
+   * ours. Anything passed here must already have been through `redactKeys()`:
+   * a provider is free to echo the request, including the key, back at us.
+   */
+  constructor(kind: AiErrorKind, detail = '', message?: string) {
+    super(message || MESSAGES[kind]);
     this.name = 'AiError';
     this.kind = kind;
     this.detail = detail;
@@ -87,6 +97,27 @@ export function toAiError(e: unknown): AiError {
 }
 
 /* -------------------------------------------------------------------- misc */
+
+/**
+ * Strip anything key-shaped out of text that came from a provider.
+ *
+ * Two passes, because both matter: the exact key we just sent (which an error
+ * body may quote verbatim) and anything else shaped like a secret, so a
+ * different key — an organization key, say — cannot ride along either.
+ */
+export function redactKeys(text: string, key = ''): string {
+  let out = text ?? '';
+  const trimmed = key.trim();
+  if (trimmed.length >= 8) out = out.split(trimmed).join('[redacted]');
+  return out
+    .replace(/\b(?:sk|rk|org|proj)[-_][A-Za-z0-9_-]{8,}/g, '[redacted]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]');
+}
+
+/** A key with every whitespace character removed. Keys never contain any. */
+export function normalizeKey(key: string): string {
+  return (key ?? '').replace(/\s+/g, '');
+}
 
 /** How long any single provider call may take. */
 export const REQUEST_TIMEOUT_MS = 90_000;

@@ -19,6 +19,7 @@ import {
   AiError,
   MIN_REQUEST_GAP_MS,
   type AspectChoice,
+  normalizeKey,
   toAiError,
 } from '../lib/ai/provider';
 import { PROVIDERS, providerById } from '../lib/ai/openai';
@@ -287,10 +288,15 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                 )}
 
                 {turn.state === 'error' && (
-                  <p className="flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
-                    <TriangleAlert size={13} className="mt-px shrink-0" />
-                    {turn.error?.message}
-                  </p>
+                  <div className="rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
+                    <p className="flex items-start gap-1.5">
+                      <TriangleAlert size={13} className="mt-px shrink-0" />
+                      {turn.error?.message}
+                    </p>
+                    {turn.error?.detail && (
+                      <p className="ml-[18px] mt-0.5 text-red-600/80">{turn.error.detail}</p>
+                    )}
+                  </div>
                 )}
 
                 {turn.state === 'done' && turn.objectUrl && (
@@ -468,7 +474,7 @@ function SettingsView({
   const [showKey, setShowKey] = useState(false);
   const [remember, setRemember] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, { message: string; detail: string }>>({});
 
   const active = activeProvider();
 
@@ -477,7 +483,7 @@ function SettingsView({
     setDraftKey('');
     setShowKey(false);
     setRemember(isRemembered(id));
-    setErrors((e) => ({ ...e, [id]: '' }));
+    setErrors((e) => ({ ...e, [id]: { message: '', detail: '' } }));
   };
 
   /**
@@ -487,18 +493,21 @@ function SettingsView({
   const testAndSave = async (id: string) => {
     const adapter = providerById(id);
     if (!adapter) return;
-    const candidate = draftKey.trim() || loadKey(id)?.key || '';
+    const candidate = normalizeKey(draftKey) || loadKey(id)?.key || '';
     if (!candidate) {
-      setErrors((e) => ({ ...e, [id]: 'Enter an API key first.' }));
+      setErrors((e) => ({ ...e, [id]: { message: 'Enter an API key first.', detail: '' } }));
       return;
     }
     setTestingId(id);
-    setErrors((e) => ({ ...e, [id]: '' }));
+    setErrors((e) => ({ ...e, [id]: { message: '', detail: '' } }));
     try {
       await adapter.testKey(candidate, new AbortController().signal);
       const model = loadKey(id)?.model || adapter.models[0];
       if (saveKey(id, model, candidate, remember) === 'full') {
-        setErrors((e) => ({ ...e, [id]: 'Storage is full, so the key is kept for this session only.' }));
+        setErrors((e) => ({
+          ...e,
+          [id]: { message: 'Storage is full, so the key is kept for this session only.', detail: '' },
+        }));
       }
       markConnected(id, true);
       setEditing(null);
@@ -509,7 +518,8 @@ function SettingsView({
     } catch (e) {
       // the stored key is untouched, which is the point
       markConnected(id, false);
-      setErrors((err) => ({ ...err, [id]: toAiError(e).message }));
+      const ai = toAiError(e);
+      setErrors((err) => ({ ...err, [id]: { message: ai.message, detail: ai.detail } }));
     } finally {
       setTestingId(null);
     }
@@ -654,11 +664,16 @@ function SettingsView({
               </div>
             )}
 
-            {errors[provider.id] && (
-              <p className="mt-1.5 flex items-start gap-1.5 rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">
-                <TriangleAlert size={12} className="mt-px shrink-0" />
-                {errors[provider.id]}
-              </p>
+            {errors[provider.id]?.message && (
+              <div className="mt-1.5 rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">
+                <p className="flex items-start gap-1.5">
+                  <TriangleAlert size={12} className="mt-px shrink-0" />
+                  {errors[provider.id].message}
+                </p>
+                {errors[provider.id].detail && (
+                  <p className="ml-[17px] mt-0.5 text-red-600/80">{errors[provider.id].detail}</p>
+                )}
+              </div>
             )}
 
             {record && (

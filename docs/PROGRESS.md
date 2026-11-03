@@ -1075,3 +1075,54 @@ a failed replacement keeping the old key and storing nothing; removing the activ
 the composer; switching the active provider cancelling an in-flight generation while keeping
 the messages; and a sweep proving **two** providers' keys appear in no design, brand, saved
 block, library record, issue, export, error string, DOM text, or any storage key but the one.
+
+## Feature 5A — amendment: OpenAI error mapping — done (2026-11-03)
+
+Errors were classified by HTTP status alone, so every 401 and 403 collapsed into one
+"That API key was rejected" — which is wrong advice for a 403 about an unverified
+organization, and actively misleading for a 429 that means "no credit" rather than
+"slow down". Mapping is now by status **and** `error.code`:
+
+| Response | Result |
+|---|---|
+| 401 (any code) | `invalid-key` — "OpenAI rejected the key. Check for typos or extra spaces, or create a new key." |
+| 403 | `forbidden` — OpenAI's own `error.message`, with the hint "This key or organization may not be allowed to use this image model." |
+| 429 `insufficient_quota` | `no-credit` — "No API credits. Add billing credit in your OpenAI account." |
+| 429 otherwise | `rate-limit` — unchanged |
+| `content_policy*` at any 4xx | `content-policy` — unchanged |
+| 5xx | `network` |
+| anything else | `bad-response` — "OpenAI error (404): The model does not exist" |
+
+`AiError` gained an optional message override and the two new kinds; the panel now renders
+`detail` as a second line, which is how the 403 hint reaches the screen.
+
+### Showing a provider's words without showing a secret
+
+Two of those cases surface OpenAI's own `error.message`, which reverses a deliberate earlier
+decision never to show provider body text — there was a passing test proving an echoed key
+could not reach the user. Rather than drop that guarantee, provider text now goes through
+`redactKeys(message, key)` before it is shown: the exact key just sent is replaced, and so is
+anything else key-shaped (`sk-`/`rk-`/`org-`/`proj-` prefixes, and any `Bearer <token>`). The
+leak test was widened to cover all six statuses rather than removed.
+
+Keys are also normalised with `normalizeKey()` — every whitespace character stripped, not just
+the ends — before saving and before every request. A pasted key with a trailing newline used
+to fail with no useful explanation; an internal newline would have survived `.trim()`.
+
+### A dead regex, caught by its own test
+
+The first version of `redactKeys` had `\b` written into the file as a literal **backspace
+byte** (0x08) rather than a word boundary, courtesy of shell escaping. The generic pass
+therefore matched nothing and was silently dead — only the exact-key replacement worked. The
+redaction test caught it. `src/` was then swept for other stray control bytes; there are none.
+
+A second regression was caught the same way: narrowing the content-policy match from
+`content_policy` to `content_policy_violation` dropped a case the previous code handled, and
+an existing UI test failed on it. The looser match is restored.
+
+### Tests
+
+Suite: **715 passing** (was 710), `tsc --noEmit` clean. Nine new cases in `ai.test.ts`: one
+per mapping, 403 with an empty message, the same classification from `testKey`, the widened
+key-leak sweep across all six statuses, redaction of a key-shaped string that is *not* the one
+sent, and an echoed `Authorization: Bearer` header.

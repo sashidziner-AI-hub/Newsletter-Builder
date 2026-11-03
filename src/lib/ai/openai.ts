@@ -24,6 +24,8 @@ import {
   type GenerateResult,
   type ImageProvider,
   REQUEST_TIMEOUT_MS,
+  normalizeKey,
+  redactKeys,
   toAiError,
 } from './provider';
 import { decodeBase64, readPngSize, toImageBlob } from './validate';
@@ -77,34 +79,90 @@ function headers(key: string): HeadersInit {
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
 }
 
+/** The shape OpenAI reports failures in. Every field is optional in practice. */
+interface OpenAiErrorBody {
+  error?: { code?: string; type?: string; message?: string };
+}
+
+/** `error.code`, falling back to `error.type`, lowercased. '' when absent. */
+function errorCodeOf(body: string): { code: string; message: string } {
+  try {
+    const parsed = JSON.parse(body) as OpenAiErrorBody;
+    const code = (parsed.error?.code || parsed.error?.type || '').toLowerCase();
+    return { code, message: (parsed.error?.message || '').trim() };
+  } catch {
+    return { code: '', message: '' };
+  }
+}
+
 /**
- * Map a failed response onto the closed error set.
+ * Map a failed response by HTTP status and `error.code`.
  *
- * The body is read for classification only; nothing from it reaches a message
- * the user sees, because a provider is free to echo the request — including
- * the key — back in an error.
+ * Two of these surface OpenAI's own `error.message`, because for a permissions
+ * or an unrecognised failure their wording says more than anything generic we
+ * could write. That text is provider-controlled, so it goes through
+ * `redactKeys()` with the key we just sent: an error body is free to quote the
+ * request back, and a 403 about an organization is exactly where that happens.
+ * Nothing else from the response is ever shown — no headers, no Authorization
+ * value, no raw body.
  */
-async function classify(res: Response): Promise<AiError> {
+async function classify(res: Response, key = ''): Promise<AiError> {
   let body = '';
   try {
-    body = (await res.text()).slice(0, 2000);
+    body = (await res.text()).slice(0, 4000);
   } catch {
     // a body we cannot read is still a status we can classify
   }
-  const lower = body.toLowerCase();
+  const { code, message } = errorCodeOf(body);
+  const safe = redactKeys(message, key);
+  const lower = `${code} ${body}`.toLowerCase();
 
-  if (res.status === 401 || res.status === 403) return new AiError('invalid-key');
-  if (res.status === 429) return new AiError('rate-limit');
-  if (res.status >= 500) return new AiError('network', `provider returned ${res.status}`);
+  if (res.status === 401) {
+    return new AiError(
+      'invalid-key',
+      code || 'invalid_api_key',
+      'OpenAI rejected the key. Check for typos or extra spaces, or create a new key.',
+    );
+  }
+
+  if (res.status === 403) {
+    return new AiError(
+      'forbidden',
+      'This key or organization may not be allowed to use this image model.',
+      safe || 'OpenAI refused this request (403).',
+    );
+  }
+
+  if (res.status === 429) {
+    if (code.includes('insufficient_quota') || lower.includes('insufficient_quota')) {
+      return new AiError(
+        'no-credit',
+        code || 'insufficient_quota',
+        'No API credits. Add billing credit in your OpenAI account.',
+      );
+    }
+    return new AiError('rate-limit', code || 'rate_limit');
+  }
+
   if (
+    code.includes('content_policy') ||
     lower.includes('content_policy') ||
     lower.includes('content policy') ||
     lower.includes('safety system') ||
     lower.includes('moderation')
   ) {
-    return new AiError('content-policy');
+    return new AiError('content-policy', code || 'content_policy_violation');
   }
-  return new AiError('bad-response', `provider returned ${res.status}`);
+
+  if (res.status >= 500) {
+    return new AiError('network', `OpenAI returned ${res.status}`);
+  }
+
+  return new AiError(
+    'bad-response',
+    code,
+    `OpenAI error (${res.status})${safe ? `: ${safe}` : ''}`,
+  );
 }
 
 /** A timeout that also honours the caller's Cancel. */
@@ -154,7 +212,9 @@ export const openAiProvider: ImageProvider = {
   models: OPENAI_MODELS,
 
   /** Free: lists models rather than generating anything billable. */
-  async testKey(key, signal) {
+  async testKey(rawKey, signal) {
+    // a pasted key often carries a trailing newline or a stray space
+    const key = normalizeKey(rawKey);
     const t = withTimeout(signal);
     try {
       const res = await fetch(`${BASE}/models`, {
@@ -162,7 +222,7 @@ export const openAiProvider: ImageProvider = {
         headers: { Authorization: `Bearer ${key}` },
         signal: t.signal,
       });
-      if (!res.ok) throw await classify(res);
+      if (!res.ok) throw await classify(res, key);
       // drain so the connection is reusable
       await res.text();
     } catch (e) {
@@ -172,7 +232,8 @@ export const openAiProvider: ImageProvider = {
     }
   },
 
-  async generate(req, key) {
+  async generate(req, rawKey) {
+    const key = normalizeKey(rawKey);
     const prompt = req.prompt.trim();
     if (!prompt) throw new AiError('bad-response', 'empty prompt');
 
@@ -186,7 +247,7 @@ export const openAiProvider: ImageProvider = {
       if (!res.ok && res.status === 400 && size !== fallback) {
         res = await requestImage(key, req.model, prompt, fallback, t.signal);
       }
-      if (!res.ok) throw await classify(res);
+      if (!res.ok) throw await classify(res, key);
 
       let payload: ImagesResponse;
       try {

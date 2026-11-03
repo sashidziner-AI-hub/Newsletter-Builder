@@ -124,7 +124,7 @@ describe('the AI panel', () => {
     fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: KEY } });
     fireEvent.click(screen.getByText('Test and save'));
 
-    await waitFor(() => expect(screen.getByText(/was rejected/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/OpenAI rejected the key/)).toBeTruthy());
     expect(screen.queryByLabelText('Image prompt')).toBeNull();
     // and nothing was stored, because the test did not pass
     expect(localStorage.getItem(AI_KEYS_STORAGE_KEY)).toBeNull();

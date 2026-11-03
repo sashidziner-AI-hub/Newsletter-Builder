@@ -338,21 +338,80 @@ describe('the OpenAI adapter', () => {
   });
 
   describe('errors', () => {
-    const cases: [number, unknown, string][] = [
-      [401, { error: { message: 'bad key' } }, 'invalid-key'],
-      [403, { error: { message: 'forbidden' } }, 'invalid-key'],
-      [429, { error: { message: 'slow down' } }, 'rate-limit'],
-      [400, { error: { message: 'rejected by our content_policy' } }, 'content-policy'],
-      [500, { error: { message: 'oops' } }, 'network'],
-      [404, { error: { message: 'no such model' } }, 'bad-response'],
-    ];
+    /** Exactly the shape OpenAI reports failures in. */
+    const oaError = (code: string, message: string) => ({ error: { code, message, type: code } });
 
-    for (const [status, body, kind] of cases) {
-      it(`maps ${status} to ${kind}`, async () => {
-        fetchMock.mockImplementation(okAlways(body, status));
-        await expect(openAiProvider.generate(request({ aspect: '1:1' }), KEY)).rejects.toMatchObject({ kind });
-      });
-    }
+    const failWith = async (status: number, body: unknown, key = KEY) => {
+      fetchMock.mockImplementation(okAlways(body, status));
+      return rejection(openAiProvider.generate(request(), key));
+    };
+
+    it('401 invalid_api_key names the likely cause', async () => {
+      const err = await failWith(401, oaError('invalid_api_key', 'Incorrect API key provided'));
+      expect(err.kind).toBe('invalid-key');
+      expect(err.message).toBe(
+        'OpenAI rejected the key. Check for typos or extra spaces, or create a new key.',
+      );
+    });
+
+    it('403 shows OpenAI’s own message, with the organization hint', async () => {
+      const err = await failWith(
+        403,
+        oaError('organization_not_verified', 'Your organization must be verified to use gpt-image-2'),
+      );
+      expect(err.kind).toBe('forbidden');
+      expect(err.message).toBe('Your organization must be verified to use gpt-image-2');
+      expect(err.detail).toBe(
+        'This key or organization may not be allowed to use this image model.',
+      );
+    });
+
+    it('403 with no message still says something useful', async () => {
+      const err = await failWith(403, {});
+      expect(err.kind).toBe('forbidden');
+      expect(err.message).toBe('OpenAI refused this request (403).');
+    });
+
+    it('429 insufficient_quota points at billing, not at waiting', async () => {
+      const err = await failWith(
+        429,
+        oaError('insufficient_quota', 'You exceeded your current quota'),
+      );
+      expect(err.kind).toBe('no-credit');
+      expect(err.message).toBe('No API credits. Add billing credit in your OpenAI account.');
+    });
+
+    it('429 rate_limit_exceeded keeps the wait-and-retry message', async () => {
+      const err = await failWith(429, oaError('rate_limit_exceeded', 'Rate limit reached'));
+      expect(err.kind).toBe('rate-limit');
+      expect(err.message).toMatch(/rate-limiting/);
+    });
+
+    it('400 content_policy_violation keeps the content-policy message', async () => {
+      const err = await failWith(
+        400,
+        oaError('content_policy_violation', 'Your request was rejected'),
+      );
+      expect(err.kind).toBe('content-policy');
+      expect(err.message).toMatch(/content-policy grounds/);
+    });
+
+    it('anything else reports the status and the provider message', async () => {
+      const err = await failWith(404, oaError('model_not_found', 'The model does not exist'));
+      expect(err.kind).toBe('bad-response');
+      expect(err.message).toBe('OpenAI error (404): The model does not exist');
+    });
+
+    it('a 5xx is a network fault, not a bad response', async () => {
+      const err = await failWith(503, oaError('server_error', 'Service unavailable'));
+      expect(err.kind).toBe('network');
+    });
+
+    it('classifies the same way from testKey', async () => {
+      fetchMock.mockImplementation(okAlways(oaError('insufficient_quota', 'no quota'), 429));
+      const err = await rejection(openAiProvider.testKey(KEY, new AbortController().signal));
+      expect(err.kind).toBe('no-credit');
+    });
 
     it('turns a thrown network fault into a network error', async () => {
       fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
@@ -377,17 +436,38 @@ describe('the OpenAI adapter', () => {
     });
 
     it('never puts the key in a message a user could see', async () => {
-      for (const [status, body] of cases.map(([st, b]) => [st, b] as const)) {
-        fetchMock.mockImplementation(okAlways(body, status));
+      const statuses = [401, 403, 429, 400, 404, 503];
+      for (const status of statuses) {
+        // the body echoes the key back, which a provider is entitled to do
+        fetchMock.mockImplementation(
+          okAlways({ error: { code: 'x', message: `key ${KEY} rejected for ${KEY}` } }, status),
+        );
         const err = await rejection(openAiProvider.generate(request(), KEY));
-        expect(err.message).not.toContain(KEY);
-        expect(err.detail).not.toContain(KEY);
+        expect(err.message, String(status)).not.toContain(KEY);
+        expect(err.detail, String(status)).not.toContain(KEY);
+        expect(String(err.stack ?? ''), String(status)).not.toContain(KEY);
       }
-      // even when the provider echoes it back, which it is free to do
-      fetchMock.mockImplementation(okAlways({ error: { message: `key ${KEY} is invalid` } }, 400));
-      const echoed = await rejection(openAiProvider.generate(request(), KEY));
-      expect(echoed.message).not.toContain(KEY);
-      expect(echoed.detail).not.toContain(KEY);
+    });
+
+    it('redacts a key-shaped string even when it is not the key we sent', async () => {
+      fetchMock.mockImplementation(
+        okAlways(
+          { error: { code: 'x', message: 'use sk-proj-AAAAAAAAAAAAAAAAAAAA instead' } },
+          404,
+        ),
+      );
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.message).not.toContain('sk-proj-AAAAAAAAAAAAAAAAAAAA');
+      expect(err.message).toContain('[redacted]');
+    });
+
+    it('never echoes an Authorization header back', async () => {
+      fetchMock.mockImplementation(
+        okAlways({ error: { code: 'x', message: `sent Authorization: Bearer ${KEY}` } }, 404),
+      );
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.message).not.toContain(KEY);
+      expect(err.message).toContain('Bearer [redacted]');
     });
   });
 

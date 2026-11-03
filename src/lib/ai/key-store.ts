@@ -15,6 +15,7 @@
  */
 
 import { writeSafe } from '../storage';
+import { normalizeKey } from './provider';
 
 /** The only key this module writes. v1 held a single provider's key. */
 const KEYS_STORAGE = 'email-builder:aikeys:v2';
@@ -177,7 +178,9 @@ export function saveKey(
   remember: boolean,
 ): 'ok' | 'full' {
   migrateLegacy();
-  const entry: StoredEntry = { model, key: key.trim() };
+  // a pasted key often arrives with a trailing newline; an internal one would
+  // survive .trim() and break every request with no useful error
+  const entry: StoredEntry = { model, key: normalizeKey(key) };
   memory.set(providerId, entry);
 
   const next = readStored();
