@@ -77,6 +77,8 @@ interface Turn {
   prompt: string;
   /** the style that produced it, named on the card */
   styleName: string;
+  /** when it was dispatched, for the live elapsed counter */
+  startedAt: number;
   state: 'loading' | 'done' | 'error';
   draft?: DraftImage;
   objectUrl?: string;
@@ -117,6 +119,8 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   const [useBrandColors, setUseBrandColors] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
+  /** ticks once a second while a generation is in flight, for "Generating 12s" */
+  const [now, setNow] = useState(() => Date.now());
   const lastSent = useRef(0);
   const abort = useRef<AbortController | null>(null);
   const listEnd = useRef<HTMLDivElement>(null);
@@ -134,6 +138,15 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   useEffect(() => {
     listEnd.current?.scrollIntoView?.({ block: 'nearest' });
   }, [turns]);
+
+  // a slow model can take most of a minute; a counter is the difference
+  // between "it is working" and "it has hung"
+  useEffect(() => {
+    if (!busy) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   /** The palette, as names and hex only. No logo, no footer, no brand name. */
   const brandSuffix = useMemo(() => {
@@ -161,7 +174,10 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     setBusy(true);
     const id = newDraftId();
     const style = styleById(styleId);
-    setTurns((prev) => [...prev, { id, prompt: text, styleName: style.name, state: 'loading' }]);
+    setTurns((prev) => [
+      ...prev,
+      { id, prompt: text, styleName: style.name, startedAt: Date.now(), state: 'loading' },
+    ]);
 
     const since = Date.now() - lastSent.current;
     if (since < MIN_REQUEST_GAP_MS) {
@@ -301,7 +317,8 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
 
                 {turn.state === 'loading' && (
                   <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-xs text-slate-500">
-                    <Loader2 size={13} className="animate-spin" /> Generating…
+                    <Loader2 size={13} className="animate-spin" />
+                    Generating… {Math.max(0, Math.round((now - turn.startedAt) / 1000))}s
                     <button type="button" className={`${btn} ml-auto`} onClick={cancelInFlight}>
                       Cancel
                     </button>

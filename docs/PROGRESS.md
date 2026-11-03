@@ -1211,3 +1211,68 @@ Verified in a real browser with a byte-checked 16×16 red PNG seeded into Indexe
 renders on the canvas with the AI-draft badge and no placeholder text, the Preview carries the
 bytes and the amended caption, and the same design exports at 3,957 characters with
 `placehold.co` present and **no** `data:`, `blob:` or draft id. Console clean.
+
+## Feature 5A — amendment: failure diagnostics and the gpt-image-2 request — done (2026-11-03)
+
+### "reply was not JSON" told you nothing
+
+A non-JSON or unusable reply now reports what was asked and what came back: HTTP status,
+`Content-Type`, elapsed seconds, and the model / quality / size that were sent, followed by
+the first 200 characters of the body as plain text — tags stripped, `<script>` and `<style>`
+contents dropped, whitespace collapsed, and keys redacted on the way through. The friendly
+sentence is the message; the facts are the detail line beneath it.
+
+Three cases are named rather than left generic:
+
+| Response | Message |
+|---|---|
+| 502 / 503 / 504 / 524 | "OpenAI gateway timed out. The image may still have been generated and billed; check your OpenAI usage before retrying. Try medium quality or a smaller size." |
+| `Content-Type: text/html` (any status) | "A proxy or firewall returned a web page instead of the API reply." |
+| empty body | "The API returned an empty reply." |
+
+HTML is detected by content type *or* by a leading `<!doctype`/`<html>`, because a captive
+portal is perfectly capable of answering 200 with a login page.
+
+**The elapsed counter** now ticks in the loading card — "Generating… 12s" — which is the
+difference between a slow model and a hung one.
+
+### The retry had to go, and the docs said why
+
+`generate()` carried an auto-retry: a 400 re-issued the request at a fallback size. That is
+exactly the double-bill risk this amendment forbids, and checking the current spec showed it
+was papering over a real bug rather than being defensive.
+
+**What the spec says:** `gpt-image-2`, its dated snapshot and the 2.5 variants accept an
+arbitrary `WIDTHxHEIGHT`, *"for example 1536x864"*, with both sides divisible by 16, a ratio
+between 1:3 and 3:1, and a 3840x2160 ceiling. Other models take the documented set only.
+
+**What was wrong:** the 4:3 map emitted **`1365x1024`**, and 1365 is not divisible by 16. So
+4:3 was rejected on every model and the retry silently downgraded it to 3:2 — the feature
+appeared to work while never once producing a 4:3 image.
+
+**Fixed:** 4:3 is now `1360x1024` (the nearest multiple of 16), a custom size is sent only to
+models that document one, everything else gets the nearest documented size, and the retry is
+deleted. One request per generation, always. A test walks every model × every aspect × three
+block widths and asserts each size satisfies all three documented constraints.
+
+Also checked and found already correct: `response_format` is never sent (deprecated and
+unsupported for GPT image models), `output_compression` is never sent (valid only with
+webp/jpeg, and we ask for png), `n: 1` and `output_format: 'png'` are supported, and `quality`
+is omitted entirely when unset so the model picks its own default.
+
+### Security
+
+The diagnostic never contains the key, the `Authorization` header or any request header — only
+the status, content type, timing, the three request parameters and the body snippet. The
+snippet goes through `redactKeys()`, whose `{8,}` pattern is stricter than the `sk-[A-Za-z0-9_-]{10,}`
+asked for and also covers `rk-`/`org-`/`proj-` and any `Bearer` token. A test feeds back both
+the key in use and an unrelated `sk-` string and asserts neither survives.
+
+### Tests
+
+Suite: **751 passing** (was 741), `tsc --noEmit` clean. New: an HTML page at 200 and at each
+gateway status, an empty body, a non-JSON body truncated at exactly 200 characters, a
+well-formed JSON error, a valid image, the model/quality/size/elapsed facts in every
+diagnostic, redaction of two different keys, no-retry-on-failure, the per-model size mapping,
+the all-models size-constraint sweep, and the exact request-body key set with and without
+quality.

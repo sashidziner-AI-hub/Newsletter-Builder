@@ -319,14 +319,81 @@ describe('the OpenAI adapter', () => {
     }
   });
 
-  it('falls back to a documented size when a custom one is refused', async () => {
-    fetchMock
-      .mockResolvedValueOnce(okResponse({ error: { message: 'invalid size' } }, 400))
-      .mockResolvedValueOnce(okResponse({ data: [{ b64_json: PNG_B64 }] }));
-    const result = await openAiProvider.generate(request({ aspect: '16:9' }), KEY);
-    expect(result.mime).toBe('image/png');
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).size).toBe('1536x864');
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).size).toBe('1536x1024');
+  it('never retries a failed generation, because the first one may be billed', async () => {
+    fetchMock.mockImplementation(okAlways({ error: { message: 'nope' } }, 400));
+    await rejection(openAiProvider.generate(request({ aspect: '16:9' }), KEY));
+    // exactly one request, whatever went wrong
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('generations'))).toHaveLength(1);
+  });
+
+  it('asks for a custom size only from models that document one', async () => {
+    fetchMock.mockImplementation(okAlways({ data: [{ b64_json: PNG_B64 }] }));
+
+    const sizeSent = async (model: string, aspect: '16:9' | '4:3' | '3:2') => {
+      fetchMock.mockClear();
+      await openAiProvider.generate(request({ model, aspect }), KEY);
+      return JSON.parse(fetchMock.mock.calls[0][1].body).size as string;
+    };
+
+    // gpt-image-2 takes arbitrary WIDTHxHEIGHT, both sides divisible by 16
+    expect(await sizeSent('gpt-image-2', '16:9')).toBe('1536x864');
+    expect(await sizeSent('gpt-image-2', '4:3')).toBe('1360x1024');
+    expect(await sizeSent('gpt-image-2.5-flare', '16:9')).toBe('1536x864');
+
+    // a model that documents no custom size gets the nearest documented one
+    expect(await sizeSent('gpt-image-1-mini', '16:9')).toBe('1536x1024');
+    expect(await sizeSent('gpt-image-1-mini', '4:3')).toBe('1536x1024');
+    // and the documented ratios are the same everywhere
+    expect(await sizeSent('gpt-image-1-mini', '3:2')).toBe('1536x1024');
+  });
+
+  it('only ever offers sizes the spec allows', async () => {
+    fetchMock.mockImplementation(okAlways({ data: [{ b64_json: PNG_B64 }] }));
+    const aspects = ['match', '1:1', '16:9', '3:2', '4:3'] as const;
+
+    for (const model of openAiProvider.models) {
+      for (const aspect of aspects) {
+        for (const blockWidth of [600, 300, 180]) {
+          fetchMock.mockClear();
+          await openAiProvider.generate(request({ model, aspect, blockWidth }), KEY);
+          const size = JSON.parse(fetchMock.mock.calls[0][1].body).size as string;
+          const [w, h] = size.split('x').map(Number);
+          // divisible by 16, within 1:3..3:1, no larger than 3840x2160
+          expect(w % 16, `${model} ${aspect} ${size}`).toBe(0);
+          expect(h % 16, `${model} ${aspect} ${size}`).toBe(0);
+          expect(w / h).toBeGreaterThanOrEqual(1 / 3);
+          expect(w / h).toBeLessThanOrEqual(3);
+          expect(w).toBeLessThanOrEqual(3840);
+          expect(h).toBeLessThanOrEqual(2160);
+        }
+      }
+    }
+  });
+
+  it('sends no parameter the GPT image models do not support', async () => {
+    fetchMock.mockImplementation(okAlways({ data: [{ b64_json: PNG_B64 }] }));
+    await openAiProvider.generate(request(), KEY);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+
+    // deprecated and unsupported for these models
+    expect(body).not.toHaveProperty('response_format');
+    // only valid with webp/jpeg, and we ask for png
+    expect(body).not.toHaveProperty('output_compression');
+    // quality is omitted entirely when unset, so the model picks its own
+    expect(Object.keys(body).sort()).toEqual(['model', 'n', 'output_format', 'prompt', 'size']);
+
+    fetchMock.mockClear();
+    await openAiProvider.generate(request({ quality: 'medium' }), KEY);
+    const withQuality = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(Object.keys(withQuality).sort()).toEqual([
+      'model',
+      'n',
+      'output_format',
+      'prompt',
+      'quality',
+      'size',
+    ]);
+    expect(withQuality.quality).toBe('medium');
   });
 
   it('returns a validated blob, not whatever came back', async () => {
@@ -361,7 +428,7 @@ describe('the OpenAI adapter', () => {
       );
       expect(err.kind).toBe('forbidden');
       expect(err.message).toBe('Your organization must be verified to use gpt-image-2');
-      expect(err.detail).toBe(
+      expect(err.detail).toContain(
         'This key or organization may not be allowed to use this image model.',
       );
     });
@@ -433,6 +500,95 @@ describe('the OpenAI adapter', () => {
       const err = await rejection(openAiProvider.generate(request(), KEY));
       expect(err.kind).toBe('bad-response');
       expect(err.detail).toMatch(/over the 10 MB limit/);
+    });
+
+    const htmlBody = (status: number) =>
+      () =>
+        new Response(
+          '<!doctype html><html><head><style>b{}</style></head><body><h1>502 Bad Gateway</h1>' +
+            '<p>The upstream server did not respond in time.</p><script>var x=1</script></body></html>',
+          { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+        );
+
+    it('names a gateway failure and warns that it may already be billed', async () => {
+      for (const status of [502, 503, 504, 524]) {
+        fetchMock.mockImplementation(htmlBody(status));
+        const err = await rejection(openAiProvider.generate(request(), KEY));
+        expect(err.kind, String(status)).toBe('network');
+        expect(err.message).toContain('OpenAI gateway timed out');
+        expect(err.message).toContain('check your OpenAI usage before retrying');
+        // the facts needed to act on it
+        expect(err.detail).toContain(String(status));
+        expect(err.detail).toContain('text/html');
+        expect(err.detail).toContain('gpt-image-1-mini');
+      }
+    });
+
+    it('calls out a proxy that answered with a web page', async () => {
+      // a 200 with HTML: a captive portal or a corporate proxy
+      fetchMock.mockImplementation(htmlBody(200));
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.message).toBe('A proxy or firewall returned a web page instead of the API reply.');
+      // tags out, whitespace collapsed, script and style contents gone
+      expect(err.detail).toContain('502 Bad Gateway The upstream server did not respond');
+      expect(err.detail).not.toContain('<');
+      expect(err.detail).not.toContain('var x=1');
+    });
+
+    it('says so when the body is empty', async () => {
+      fetchMock.mockImplementation(() => new Response('', { status: 200 }));
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.message).toBe('The API returned an empty reply.');
+      expect(err.detail).toContain('200');
+    });
+
+    it('reports a non-JSON body with the first 200 characters of it', async () => {
+      const junk = 'x'.repeat(400);
+      fetchMock.mockImplementation(
+        () => new Response(junk, { status: 200, headers: { 'Content-Type': 'text/plain' } }),
+      );
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.message).toBe('OpenAI sent a reply that is not JSON.');
+      expect(err.detail).toContain('x'.repeat(200));
+      expect(err.detail).not.toContain('x'.repeat(201));
+    });
+
+    it('carries the model, quality and size in every diagnostic', async () => {
+      fetchMock.mockImplementation(() => new Response('not json', { status: 200 }));
+      const err = await rejection(
+        openAiProvider.generate(
+          request({ model: 'gpt-image-2', quality: 'medium', aspect: '16:9' }),
+          KEY,
+        ),
+      );
+      expect(err.detail).toContain('gpt-image-2');
+      expect(err.detail).toContain('medium');
+      expect(err.detail).toContain('1536x864');
+      expect(err.detail).toMatch(/\d+s/);
+    });
+
+    it('still reports a well-formed JSON error from the API', async () => {
+      fetchMock.mockImplementation(
+        okAlways({ error: { code: 'model_not_found', message: 'The model does not exist' } }, 404),
+      );
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.kind).toBe('bad-response');
+      expect(err.message).toBe('OpenAI error (404): The model does not exist');
+    });
+
+    it('redacts a key out of a body snippet', async () => {
+      fetchMock.mockImplementation(
+        () =>
+          new Response(`<html><body>rejected ${KEY} and sk-OTHERKEY1234567890</body></html>`, {
+            status: 502,
+            headers: { 'Content-Type': 'text/html' },
+          }),
+      );
+      const err = await rejection(openAiProvider.generate(request(), KEY));
+      expect(err.detail).not.toContain(KEY);
+      expect(err.detail).not.toContain('sk-OTHERKEY1234567890');
+      expect(err.detail).toContain('[redacted]');
+      expect(err.message).not.toContain(KEY);
     });
 
     it('never puts the key in a message a user could see', async () => {

@@ -48,36 +48,90 @@ export const OPENAI_MODELS = [
   'chatgpt-image-latest',
 ] as const;
 
-/** The sizes the API documents. Anything else is a custom request that may 400. */
+/** The sizes every image model documents. */
 const SQUARE = '1024x1024';
 const LANDSCAPE = '1536x1024';
 const PORTRAIT = '1024x1536';
 
 /**
- * An aspect choice as a `WIDTHxHEIGHT` string, plus the documented size to fall
- * back to if the model refuses a custom one. 16:9 and 4:3 have no documented
- * equivalent, so they are the two that can fall back.
+ * Models that take an arbitrary `WIDTHxHEIGHT`.
+ *
+ * The spec names gpt-image-2, its dated snapshot, and the 2.5 variants. The
+ * constraints it states are: both dimensions divisible by 16, aspect ratio
+ * between 1:3 and 3:1, and no larger than 3840x2160.
  */
-function sizeFor(req: GenerateRequest): { size: string; fallback: string } {
+const ARBITRARY_SIZE = /^gpt-image-2(\.5)?(-|$)/;
+
+/**
+ * The size to ask for.
+ *
+ * Previously 16:9 and 4:3 were sent as custom sizes to every model with a
+ * retry behind them. Two things were wrong with that: `1365x1024` is not
+ * divisible by 16, so 4:3 was rejected and silently became 3:2; and a model
+ * that takes no custom size at all was being asked for one on purpose. Now the
+ * exact ratio goes only to models that document it, everything else gets the
+ * nearest documented size, and there is nothing to retry.
+ */
+function sizeFor(req: GenerateRequest): string {
+  const arbitrary = ARBITRARY_SIZE.test(req.model);
+
   switch (req.aspect) {
     case '1:1':
-      return { size: SQUARE, fallback: SQUARE };
+      return SQUARE;
     case '3:2':
-      return { size: LANDSCAPE, fallback: LANDSCAPE };
+      return LANDSCAPE;
     case '16:9':
-      return { size: '1536x864', fallback: LANDSCAPE };
+      return arbitrary ? '1536x864' : LANDSCAPE;
     case '4:3':
-      return { size: '1365x1024', fallback: LANDSCAPE };
+      // 1360 is the nearest multiple of 16 to a true 4:3 at this height
+      return arbitrary ? '1360x1024' : LANDSCAPE;
     case 'match':
     default:
       // a full-width block reads as landscape, a narrow column as a portrait,
       // and anything between as a square
-      if (req.blockWidth >= 480) return { size: LANDSCAPE, fallback: LANDSCAPE };
-      if (req.blockWidth > 0 && req.blockWidth < 220) {
-        return { size: PORTRAIT, fallback: PORTRAIT };
-      }
-      return { size: SQUARE, fallback: SQUARE };
+      if (req.blockWidth >= 480) return LANDSCAPE;
+      if (req.blockWidth > 0 && req.blockWidth < 220) return PORTRAIT;
+      return SQUARE;
   }
+}
+
+/** What the request was, for a diagnostic that can actually be acted on. */
+interface Attempt {
+  status: number;
+  contentType: string;
+  elapsedMs: number;
+  model: string;
+  quality?: string;
+  size: string;
+}
+
+/** `502 · text/html · 31s · gpt-image-2 / high / 1536x864` */
+function describeAttempt(a: Attempt): string {
+  const secs = Math.round(a.elapsedMs / 1000);
+  const bits = [
+    String(a.status || 'no status'),
+    a.contentType || 'no content-type',
+    `${secs}s`,
+    [a.model, a.quality, a.size].filter(Boolean).join(' / '),
+  ];
+  return bits.join(' \u00b7 ');
+}
+
+/**
+ * The first 200 characters of a body, as plain text.
+ *
+ * A proxy or a gateway answers with HTML, which is unreadable in a one-line
+ * error, so tags come out and whitespace collapses. Keys are redacted on the
+ * way through: this snippet is the one place a response body reaches a human.
+ */
+function snippet(body: string, key: string): string {
+  const text = redactKeys(body, key)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
 }
 
 /** Only ever these two. See the header comment. */
@@ -112,7 +166,7 @@ function errorCodeOf(body: string): { code: string; message: string } {
  * Nothing else from the response is ever shown — no headers, no Authorization
  * value, no raw body.
  */
-async function classify(res: Response, key = ''): Promise<AiError> {
+async function classify(res: Response, key: string, attempt: Attempt): Promise<AiError> {
   let body = '';
   try {
     body = (await res.text()).slice(0, 4000);
@@ -122,11 +176,13 @@ async function classify(res: Response, key = ''): Promise<AiError> {
   const { code, message } = errorCodeOf(body);
   const safe = redactKeys(message, key);
   const lower = `${code} ${body}`.toLowerCase();
+  const facts = describeAttempt({ ...attempt, contentType: attempt.contentType });
+  const detail = (extra = '') => [facts, extra].filter(Boolean).join(' \u2014 ');
 
   if (res.status === 401) {
     return new AiError(
       'invalid-key',
-      code || 'invalid_api_key',
+      detail(code || 'invalid_api_key'),
       'OpenAI rejected the key. Check for typos or extra spaces, or create a new key.',
     );
   }
@@ -134,7 +190,7 @@ async function classify(res: Response, key = ''): Promise<AiError> {
   if (res.status === 403) {
     return new AiError(
       'forbidden',
-      'This key or organization may not be allowed to use this image model.',
+      detail('This key or organization may not be allowed to use this image model.'),
       safe || 'OpenAI refused this request (403).',
     );
   }
@@ -143,11 +199,21 @@ async function classify(res: Response, key = ''): Promise<AiError> {
     if (code.includes('insufficient_quota') || lower.includes('insufficient_quota')) {
       return new AiError(
         'no-credit',
-        code || 'insufficient_quota',
+        detail(code || 'insufficient_quota'),
         'No API credits. Add billing credit in your OpenAI account.',
       );
     }
-    return new AiError('rate-limit', code || 'rate_limit');
+    return new AiError('rate-limit', detail(code || 'rate_limit'));
+  }
+
+  // a gateway failure is the expensive one: the image may well have been made
+  // and billed, and a retry would pay for it twice
+  if (GATEWAY_STATUSES.has(res.status)) {
+    return new AiError(
+      'network',
+      detail(snippet(body, key)),
+      'OpenAI gateway timed out. The image may still have been generated and billed; check your OpenAI usage before retrying. Try medium quality or a smaller size.',
+    );
   }
 
   if (
@@ -157,18 +223,37 @@ async function classify(res: Response, key = ''): Promise<AiError> {
     lower.includes('safety system') ||
     lower.includes('moderation')
   ) {
-    return new AiError('content-policy', code || 'content_policy_violation');
+    return new AiError('content-policy', detail(code || 'content_policy_violation'));
+  }
+
+  if (isHtml(attempt.contentType, body)) {
+    return new AiError(
+      'bad-response',
+      detail(snippet(body, key)),
+      'A proxy or firewall returned a web page instead of the API reply.',
+    );
+  }
+
+  if (!body.trim()) {
+    return new AiError('bad-response', detail(), 'The API returned an empty reply.');
   }
 
   if (res.status >= 500) {
-    return new AiError('network', `OpenAI returned ${res.status}`);
+    return new AiError('network', detail(snippet(body, key)), `OpenAI returned ${res.status}.`);
   }
 
   return new AiError(
     'bad-response',
-    code,
+    detail(snippet(body, key)),
     `OpenAI error (${res.status})${safe ? `: ${safe}` : ''}`,
   );
+}
+
+/** Gateways in front of the API, which fail after the work may already be done. */
+const GATEWAY_STATUSES = new Set([502, 503, 504, 524]);
+
+function isHtml(contentType: string, body: string): boolean {
+  return /text\/html/i.test(contentType) || /^\s*<(?:!doctype|html)\b/i.test(body);
 }
 
 /** A timeout that also honours the caller's Cancel. */
@@ -225,13 +310,22 @@ export const openAiProvider: ImageProvider = {
     // a pasted key often carries a trailing newline or a stray space
     const key = normalizeKey(rawKey);
     const t = withTimeout(signal);
+    const started = Date.now();
     try {
       const res = await fetch(`${BASE}/models`, {
         method: 'GET',
         headers: { Authorization: `Bearer ${key}` },
         signal: t.signal,
       });
-      if (!res.ok) throw await classify(res, key);
+      if (!res.ok) {
+        throw await classify(res, key, {
+          status: res.status,
+          contentType: res.headers.get('content-type') ?? '',
+          elapsedMs: Date.now() - started,
+          model: 'models',
+          size: '-',
+        });
+      }
       // drain so the connection is reusable
       await res.text();
     } catch (e) {
@@ -246,32 +340,80 @@ export const openAiProvider: ImageProvider = {
     const prompt = req.prompt.trim();
     if (!prompt) throw new AiError('bad-response', 'empty prompt');
 
-    const { size, fallback } = sizeFor(req);
+    const size = sizeFor(req);
     const t = withTimeout(req.signal);
-    try {
-      let res = await requestImage(key, req.model, prompt, size, req.quality, t.signal);
+    const started = Date.now();
 
-      // 16:9 and 4:3 are custom sizes; a model that will not take one gets the
-      // nearest documented size rather than an error the user cannot act on
-      if (!res.ok && res.status === 400 && size !== fallback) {
-        res = await requestImage(key, req.model, prompt, fallback, req.quality, t.signal);
+    /** The facts about this one attempt, for any diagnostic below. */
+    const attemptOf = (res?: Response): Attempt => ({
+      status: res?.status ?? 0,
+      contentType: res?.headers.get('content-type') ?? '',
+      elapsedMs: Date.now() - started,
+      model: req.model,
+      quality: req.quality,
+      size,
+    });
+
+    try {
+      // Deliberately one request and no retry: a generation that failed late
+      // may already have been produced and billed, and asking again would pay
+      // for it twice. Sizes are chosen per model so there is nothing to retry.
+      const res = await requestImage(key, req.model, prompt, size, req.quality, t.signal);
+      const attempt = attemptOf(res);
+
+      if (!res.ok) throw await classify(res, key, attempt);
+
+      const body = await res.text();
+      if (!body.trim()) {
+        throw new AiError(
+          'bad-response',
+          describeAttempt(attempt),
+          'The API returned an empty reply.',
+        );
       }
-      if (!res.ok) throw await classify(res, key);
+      if (isHtml(attempt.contentType, body)) {
+        throw new AiError(
+          'bad-response',
+          `${describeAttempt(attempt)} \u2014 ${snippet(body, key)}`,
+          'A proxy or firewall returned a web page instead of the API reply.',
+        );
+      }
 
       let payload: ImagesResponse;
       try {
-        payload = (await res.json()) as ImagesResponse;
+        payload = JSON.parse(body) as ImagesResponse;
       } catch {
-        throw new AiError('bad-response', 'reply was not JSON');
+        throw new AiError(
+          'bad-response',
+          `${describeAttempt(attempt)} \u2014 ${snippet(body, key)}`,
+          'OpenAI sent a reply that is not JSON.',
+        );
       }
 
       const b64 = payload.data?.[0]?.b64_json;
       if (typeof b64 !== 'string' || !b64) {
-        throw new AiError('bad-response', 'reply carried no image data');
+        throw new AiError(
+          'bad-response',
+          `${describeAttempt(attempt)} \u2014 ${snippet(body, key)}`,
+          'OpenAI replied without any image data.',
+        );
       }
 
       const bytes = decodeBase64(b64);
-      const { blob, mime } = toImageBlob(bytes);
+      let blob: Blob;
+      let mime: string;
+      try {
+        ({ blob, mime } = toImageBlob(bytes));
+      } catch (e) {
+        // the bytes arrived but are not an image we accept; say which, and
+        // what was asked for, rather than just "not a usable image"
+        const why = e instanceof AiError ? e.detail : 'unreadable';
+        throw new AiError(
+          'bad-response',
+          `${describeAttempt(attempt)} \u2014 ${why}`,
+          'OpenAI returned something that is not a usable image.',
+        );
+      }
       const { width, height } = readPngSize(bytes);
       return { blob, mime, width, height } satisfies GenerateResult;
     } catch (e) {
