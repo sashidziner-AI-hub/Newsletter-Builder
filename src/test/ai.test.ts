@@ -2,13 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { veeBrand } from '../lib/brand';
 import { checkDesign } from '../lib/checks';
 import {
-  AI_KEY_STORAGE_KEY,
+  AI_KEYS_STORAGE_KEY,
+  AI_LEGACY_STORAGE_KEY,
+  activeProvider,
+  clearAllKeys,
   clearKey,
   hasKey,
   isRemembered,
   loadKey,
+  markConnected,
   maskKey,
   saveKey,
+  setActiveProvider,
+  statusOf,
 } from '../lib/ai/key-store';
 import { openAiProvider } from '../lib/ai/openai';
 import { AiError, MAX_IMAGE_BYTES, type GenerateRequest } from '../lib/ai/provider';
@@ -140,45 +146,128 @@ describe('response validation', () => {
 
 /* ------------------------------------------------------------ key store */
 
-describe('the API key', () => {
+const KEY_B = 'sk-second-provider-DO-NOT-LEAK-zzz';
+
+describe('the API keys, one per provider', () => {
   beforeEach(() => {
     localStorage.clear();
-    clearKey();
+    clearAllKeys();
   });
-  afterEach(() => clearKey());
+  afterEach(() => clearAllKeys());
 
   it('lives in memory by default and is not written to storage', () => {
     saveKey('openai', 'gpt-image-1-mini', KEY, false);
-    expect(loadKey()?.key).toBe(KEY);
-    expect(hasKey()).toBe(true);
-    expect(isRemembered()).toBe(false);
-    expect(localStorage.getItem(AI_KEY_STORAGE_KEY)).toBeNull();
-    // and in no other key either
+    expect(loadKey('openai')?.key).toBe(KEY);
+    expect(hasKey('openai')).toBe(true);
+    expect(isRemembered('openai')).toBe(false);
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY)).toBeNull();
     expect(JSON.stringify(localStorage)).not.toContain(KEY);
   });
 
-  it('writes to exactly one key when remembering, and nowhere else', () => {
+  it('writes to exactly one storage key when remembering, and nowhere else', () => {
     saveKey('openai', 'gpt-image-1-mini', KEY, true);
-    expect(isRemembered()).toBe(true);
+    expect(isRemembered('openai')).toBe(true);
     const holders = Object.keys(localStorage).filter((k) =>
       (localStorage.getItem(k) ?? '').includes(KEY),
     );
-    expect(holders).toEqual([AI_KEY_STORAGE_KEY]);
+    expect(holders).toEqual([AI_KEYS_STORAGE_KEY]);
   });
 
-  it('unticking Remember clears the stored copy rather than leaving it', () => {
+  it('keeps two providers side by side without either overwriting the other', () => {
     saveKey('openai', 'gpt-image-1-mini', KEY, true);
+    saveKey('mock', 'mock-1', KEY_B, true);
+
+    expect(loadKey('openai')?.key).toBe(KEY);
+    expect(loadKey('mock')?.key).toBe(KEY_B);
+    expect(loadKey('openai')?.model).toBe('gpt-image-1-mini');
+    expect(loadKey('mock')?.model).toBe('mock-1');
+  });
+
+  it('remembers per provider, so one can be on disk and the other not', () => {
+    saveKey('openai', 'gpt-image-1-mini', KEY, true);
+    saveKey('mock', 'mock-1', KEY_B, false);
+
+    expect(isRemembered('openai')).toBe(true);
+    expect(isRemembered('mock')).toBe(false);
+    const stored = localStorage.getItem(AI_KEYS_STORAGE_KEY) ?? '';
+    expect(stored).toContain(KEY);
+    expect(stored).not.toContain(KEY_B);
+    // but the un-remembered one still works this session
+    expect(loadKey('mock')?.key).toBe(KEY_B);
+  });
+
+  it('removes one provider without touching the other', () => {
+    saveKey('openai', 'gpt-image-1-mini', KEY, true);
+    saveKey('mock', 'mock-1', KEY_B, true);
+    clearKey('openai');
+
+    expect(hasKey('openai')).toBe(false);
+    expect(hasKey('mock')).toBe(true);
+    const stored = localStorage.getItem(AI_KEYS_STORAGE_KEY) ?? '';
+    expect(stored).not.toContain(KEY);
+    expect(stored).toContain(KEY_B);
+  });
+
+  it('unticking Remember clears only that provider stored copy', () => {
+    saveKey('openai', 'gpt-image-1-mini', KEY, true);
+    saveKey('mock', 'mock-1', KEY_B, true);
     saveKey('openai', 'gpt-image-1-mini', KEY, false);
-    expect(localStorage.getItem(AI_KEY_STORAGE_KEY)).toBeNull();
-    expect(loadKey()?.key).toBe(KEY); // still usable this session
+
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY) ?? '').not.toContain(KEY);
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY) ?? '').toContain(KEY_B);
+    expect(loadKey('openai')?.key).toBe(KEY); // still usable this session
   });
 
-  it('Remove key clears memory and storage together', () => {
+  it('tracks the active provider and remembers it', () => {
     saveKey('openai', 'gpt-image-1-mini', KEY, true);
-    clearKey();
-    expect(hasKey()).toBe(false);
-    expect(localStorage.getItem(AI_KEY_STORAGE_KEY)).toBeNull();
+    expect(activeProvider()).toBe('openai'); // first save becomes active
+    saveKey('mock', 'mock-1', KEY_B, true);
+    setActiveProvider('mock');
+    expect(activeProvider()).toBe('mock');
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY) ?? '').toContain('"activeProviderId":"mock"');
+  });
+
+  it('clears the active pointer when that provider is removed', () => {
+    saveKey('mock', 'mock-1', KEY_B, true);
+    setActiveProvider('mock');
+    clearKey('mock');
+    expect(activeProvider()).toBeNull();
+  });
+
+  it('reports status, and only a passing test makes it connected', () => {
+    expect(statusOf('openai')).toBe('not-configured');
+    saveKey('openai', 'gpt-image-1-mini', KEY, false);
+    expect(statusOf('openai')).toBe('configured');
+    markConnected('openai', true);
+    expect(statusOf('openai')).toBe('connected');
+    markConnected('openai', false);
+    expect(statusOf('openai')).toBe('configured');
+  });
+
+  it('migrates a key saved under the old single-slot shape', () => {
+    // clearAllKeys resets the run-once flag as well as storage, so the legacy
+    // record has to be seeded after it
+    clearAllKeys();
+    localStorage.setItem(
+      AI_LEGACY_STORAGE_KEY,
+      JSON.stringify({ providerId: 'openai', model: 'gpt-image-1-mini', key: KEY, schemaVersion: 1 }),
+    );
+
+    expect(loadKey('openai')?.key).toBe(KEY);
+    expect(loadKey('openai')?.model).toBe('gpt-image-1-mini');
+    expect(activeProvider()).toBe('openai');
+    // the old record is gone, so there is one place to look again
+    expect(localStorage.getItem(AI_LEGACY_STORAGE_KEY)).toBeNull();
+  });
+
+  it('wipes everything on clearAllKeys', () => {
+    saveKey('openai', 'gpt-image-1-mini', KEY, true);
+    saveKey('mock', 'mock-1', KEY_B, true);
+    clearAllKeys();
+    expect(hasKey('openai')).toBe(false);
+    expect(hasKey('mock')).toBe(false);
     expect(JSON.stringify(localStorage)).not.toContain(KEY);
+    expect(JSON.stringify(localStorage)).not.toContain(KEY_B);
   });
 
   it('masks for display without revealing the middle', () => {

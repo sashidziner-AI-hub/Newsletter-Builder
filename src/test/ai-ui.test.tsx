@@ -11,7 +11,7 @@ import App from '../App';
 import { useEditor } from '../store';
 import { veeBrand } from '../lib/brand';
 import { checkDesign } from '../lib/checks';
-import { clearKey, AI_KEY_STORAGE_KEY } from '../lib/ai/key-store';
+import { clearAllKeys, AI_KEYS_STORAGE_KEY } from '../lib/ai/key-store';
 import { draftStore } from '../lib/drafts';
 import { createBlock, createRow, emptyDesign } from '../lib/defaults';
 import { normalizeDesign } from '../lib/design-ops';
@@ -45,7 +45,7 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   localStorage.clear();
-  clearKey();
+  clearAllKeys();
   vi.stubGlobal('fetch', fetchMock);
   fetchMock.mockReset();
   // jsdom has neither of these
@@ -59,7 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  clearKey();
+  clearAllKeys();
 });
 
 /* --------------------------------------------------------------- helpers */
@@ -67,14 +67,12 @@ afterEach(() => {
 /** Walk the setup state: enter a key, test it, save it. */
 async function configureKey() {
   fetchMock.mockImplementation(json({ data: [] }));
-  fireEvent.change(screen.getByLabelText('API key'), { target: { value: KEY } });
-  fireEvent.click(screen.getByText('Test connection'));
-  await waitFor(() => expect(screen.queryByText('Testing…')).toBeNull());
-  // a key saved before testing is already configured, so a passing test moves
-  // straight to the composer and there is no Save left to click
-  const save = screen.queryByText('Save');
-  if (save) fireEvent.click(save);
-  await waitFor(() => expect(screen.getByLabelText('Image prompt')).toBeTruthy());
+  fireEvent.click(screen.getByText('Add key'));
+  fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: KEY } });
+  fireEvent.click(screen.getByText('Test and save'));
+  await waitFor(() => expect(screen.getByLabelText('Image prompt')).toBeTruthy(), {
+    timeout: 5000,
+  });
 }
 
 async function generate(prompt: string) {
@@ -87,21 +85,32 @@ async function generate(prompt: string) {
 /* ------------------------------------------------------------ the gating */
 
 describe('the AI panel', () => {
-  it('hides the composer until a key is saved and tested', async () => {
+  it('opens on settings and hides the composer until a key passes its test', async () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Image'));
     fireEvent.click(screen.getByText('Generate with AI'));
 
-    // setup state only
-    expect(screen.getByLabelText('API key')).toBeTruthy();
-    expect(screen.queryByLabelText('Image prompt')).toBeNull();
-
-    // saving without testing is not enough
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: KEY } });
-    fireEvent.click(screen.getByText('Save'));
+    // settings first, with the provider listed and unconfigured
+    expect(screen.getByText('Not configured')).toBeTruthy();
     expect(screen.queryByLabelText('Image prompt')).toBeNull();
 
     await configureKey();
+    expect(screen.getByLabelText('Image prompt')).toBeTruthy();
+  });
+
+  it('keeps settings reachable once a key is configured', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Image'));
+    fireEvent.click(screen.getByText('Generate with AI'));
+    await configureKey();
+
+    // this is the bug the fix is for: a gear in the header, from the chat
+    fireEvent.click(screen.getByLabelText('AI settings'));
+    expect(screen.getByText('Connected')).toBeTruthy();
+    expect(screen.getByText('Replace key')).toBeTruthy();
+    expect(screen.getByText('Remove key')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Back to chat'));
     expect(screen.getByLabelText('Image prompt')).toBeTruthy();
   });
 
@@ -111,11 +120,14 @@ describe('the AI panel', () => {
     fireEvent.click(screen.getByText('Generate with AI'));
 
     fetchMock.mockImplementation(json({ error: { message: 'bad key' } }, 401));
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: KEY } });
-    fireEvent.click(screen.getByText('Test connection'));
+    fireEvent.click(screen.getByText('Add key'));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: KEY } });
+    fireEvent.click(screen.getByText('Test and save'));
 
     await waitFor(() => expect(screen.getByText(/was rejected/)).toBeTruthy());
     expect(screen.queryByLabelText('Image prompt')).toBeNull();
+    // and nothing was stored, because the test did not pass
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY)).toBeNull();
   });
 
   it('has a Back button that restores the properties panel', async () => {
@@ -441,11 +453,11 @@ describe('the key never escapes', () => {
 
     // storage: only the one dedicated key may hold it, and only if remembered
     for (const name of Object.keys(localStorage)) {
-      if (name === AI_KEY_STORAGE_KEY) continue;
+      if (name === AI_KEYS_STORAGE_KEY) continue;
       expect(localStorage.getItem(name) ?? '', name).not.toContain(KEY);
     }
     // this run did not tick Remember, so not even there
-    expect(localStorage.getItem(AI_KEY_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(AI_KEYS_STORAGE_KEY)).toBeNull();
     expect(document.body.textContent).not.toContain(KEY);
   });
 });

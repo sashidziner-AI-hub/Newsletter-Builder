@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  Check,
   Download,
   Eye,
   EyeOff,
   Loader2,
   Pencil,
+  Plug,
   RefreshCw,
   Send,
+  Settings,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -19,7 +22,20 @@ import {
   toAiError,
 } from '../lib/ai/provider';
 import { PROVIDERS, providerById } from '../lib/ai/openai';
-import { clearKey, isRemembered, loadKey, maskKey, saveKey, setModel } from '../lib/ai/key-store';
+import {
+  type ProviderStatus,
+  activeProvider,
+  clearKey,
+  isConnected,
+  isRemembered,
+  loadKey,
+  markConnected,
+  maskKey,
+  saveKey,
+  setActiveProvider,
+  setModel,
+  statusOf,
+} from '../lib/ai/key-store';
 import { draftStore, newDraftId, type DraftImage } from '../lib/drafts';
 import { imageHosting } from '../lib/image-storage';
 import { downloadFile } from '../lib/util';
@@ -33,6 +49,18 @@ const ASPECTS: { value: AspectChoice; label: string }[] = [
   { value: '3:2', label: '3:2' },
   { value: '4:3', label: '4:3' },
 ];
+
+const STATUS_LABEL: Record<ProviderStatus, string> = {
+  'not-configured': 'Not configured',
+  configured: 'Configured',
+  connected: 'Connected',
+};
+
+const STATUS_STYLE: Record<ProviderStatus, string> = {
+  'not-configured': 'bg-slate-100 text-slate-500',
+  configured: 'bg-amber-100 text-amber-800',
+  connected: 'bg-emerald-100 text-emerald-800',
+};
 
 /** One turn in the session. Results are held in memory; nothing here persists. */
 interface Turn {
@@ -53,17 +81,23 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   const brand = useActiveBrand();
   const refreshDrafts = useEditor((s) => s.refreshDrafts);
 
-  const existing = loadKey();
-  const [providerId, setProviderId] = useState(existing?.providerId || PROVIDERS[0].id);
-  const provider = providerById(providerId) ?? PROVIDERS[0];
-  const [model, setModelState] = useState(existing?.model || provider.models[0]);
-  const [keyInput, setKeyInput] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [remember, setRemember] = useState(isRemembered());
-  const [configured, setConfigured] = useState(existing !== null);
-  const [tested, setTested] = useState(existing !== null);
-  const [testing, setTesting] = useState(false);
-  const [setupError, setSetupError] = useState('');
+  /** Bumped whenever the key store changes, to re-read it without a subscription. */
+  const [keyRevision, setKeyRevision] = useState(0);
+  const bumpKeys = () => setKeyRevision((n) => n + 1);
+
+  const active = useMemo(() => activeProvider(), [keyRevision]);
+  const activeAdapter = active ? providerById(active) : null;
+  const activeRecord = active ? loadKey(active) : null;
+  const activeConnected = !!active && isConnected(active);
+
+  /**
+   * Which half of the panel is showing. Deliberately independent of whether a
+   * key exists — that coupling was the bug: once configured, there was no way
+   * back to settings.
+   */
+  const [view, setView] = useState<'chat' | 'settings'>(() =>
+    activeProvider() && isConnected(activeProvider()!) ? 'chat' : 'settings',
+  );
 
   const [prompt, setPrompt] = useState(target.seed ? `${target.seed}` : '');
   const [aspect, setAspect] = useState<AspectChoice>('match');
@@ -94,52 +128,21 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     return ` Use this colour palette: primary ${c.primary}, secondary ${c.secondary}, accent ${c.accent}.`;
   }, [brand]);
 
-  const composerReady = configured && tested && !busy;
+  const composerReady = !!activeAdapter && activeConnected && !busy;
 
-  /* ------------------------------------------------------------- setup */
-
-  const testConnection = async () => {
-    const key = keyInput.trim() || existing?.key || '';
-    if (!key) return setSetupError('Enter an API key first.');
-    setTesting(true);
-    setSetupError('');
-    const ctl = new AbortController();
-    try {
-      await provider.testKey(key, ctl.signal);
-      setTested(true);
-    } catch (e) {
-      setTested(false);
-      setSetupError(toAiError(e).message);
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const save = () => {
-    const key = keyInput.trim();
-    if (!key) return setSetupError('Enter an API key first.');
-    if (saveKey(provider.id, model, key, remember) === 'full') {
-      return setSetupError('Browser storage is full, so the key was kept for this session only.');
-    }
-    setConfigured(true);
-    setKeyInput('');
-    setSetupError('');
-  };
-
-  const removeKey = () => {
-    clearKey();
-    setConfigured(false);
-    setTested(false);
-    setKeyInput('');
-    setRemember(false);
+  /** An in-flight generation must not outlive the provider it was sent to. */
+  const cancelInFlight = () => {
+    abort.current?.abort();
+    abort.current = null;
   };
 
   /* -------------------------------------------------------- generation */
 
   const run = async (text: string) => {
-    const key = loadKey()?.key;
+    if (!activeAdapter || !active) return;
+    const key = loadKey(active)?.key;
     if (!key) {
-      setConfigured(false);
+      setView('settings');
       return;
     }
     setBusy(true);
@@ -155,9 +158,10 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     const ctl = new AbortController();
     abort.current = ctl;
     const full = useBrandColors ? text + brandSuffix : text;
+    const model = loadKey(active)?.model || activeAdapter.models[0];
 
     try {
-      const result = await provider.generate(
+      const result = await activeAdapter.generate(
         { prompt: full, aspect, blockWidth: target.blockWidth, model, signal: ctl.signal },
         key,
       );
@@ -228,127 +232,36 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
           <h2 className="flex items-center gap-1.5 truncate text-sm font-semibold text-slate-900">
             <Sparkles size={14} className="shrink-0 text-brand-600" /> AI image
           </h2>
-          <p className="truncate text-[11px] text-slate-400">{target.label}</p>
+          <p className="truncate text-[11px] text-slate-400">
+            {view === 'chat' && activeAdapter
+              ? `Provider: ${activeAdapter.name} / ${activeRecord?.model || activeAdapter.models[0]}`
+              : target.label}
+          </p>
         </div>
+        {/* reachable from both views — this is what was missing */}
+        <button
+          type="button"
+          aria-label={view === 'settings' ? 'Back to chat' : 'AI settings'}
+          title={view === 'settings' ? 'Back to chat' : 'AI settings'}
+          onClick={() => setView(view === 'settings' ? 'chat' : 'settings')}
+          className={`rounded-md p-1.5 ${
+            view === 'settings'
+              ? 'bg-slate-100 text-slate-900'
+              : 'text-slate-500 hover:bg-slate-100'
+          }`}
+        >
+          {view === 'settings' ? <ArrowLeft size={17} /> : <Settings size={17} />}
+        </button>
       </div>
 
-      {!configured || !tested ? (
-        /* ---------------------------------------------------- setup state */
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Provider</span>
-            <select
-              aria-label="Provider"
-              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-              value={providerId}
-              onChange={(e) => {
-                setProviderId(e.target.value);
-                setTested(false);
-              }}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Model</span>
-            <select
-              aria-label="Model"
-              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-              value={model}
-              onChange={(e) => {
-                setModelState(e.target.value);
-                setModel(e.target.value);
-              }}
-            >
-              {provider.models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">API key</span>
-            <div className="flex gap-1">
-              <input
-                aria-label="API key"
-                type={showKey ? 'text' : 'password'}
-                autoComplete="off"
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 font-mono text-xs"
-                placeholder={configured ? maskKey(existing?.key ?? '') : 'sk-…'}
-                value={keyInput}
-                onChange={(e) => {
-                  setKeyInput(e.target.value);
-                  setTested(false);
-                }}
-              />
-              <button
-                type="button"
-                aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                onClick={() => setShowKey((v) => !v)}
-                className="rounded-md border border-slate-300 px-2 text-slate-500 hover:bg-slate-50"
-              >
-                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            </div>
-          </label>
-
-          <label className="flex items-start gap-2 text-[11px] leading-snug text-slate-600">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            <span>
-              Remember on this device.
-              <span className="block text-amber-700">
-                Stored unencrypted in this browser. Anyone with access to this machine, or any
-                script that runs on this page, could read it.
-              </span>
-            </span>
-          </label>
-
-          {setupError && (
-            <p className="flex items-start gap-1.5 rounded-md bg-red-50 px-2 py-1.5 text-[11px] text-red-700">
-              <TriangleAlert size={13} className="mt-px shrink-0" />
-              {setupError}
-            </p>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={btn} disabled={testing} onClick={() => void testConnection()}>
-              {testing && <Loader2 size={12} className="animate-spin" />}
-              {testing ? 'Testing…' : 'Test connection'}
-            </button>
-            <button type="button" className={primary} onClick={save}>
-              Save
-            </button>
-            {configured && (
-              <button type="button" className={btn} onClick={removeKey}>
-                <Trash2 size={12} /> Remove key
-              </button>
-            )}
-          </div>
-
-          <p className="text-[11px] leading-snug text-slate-400">
-            Your key stays in this browser — it is never sent anywhere except {provider.name}, and
-            never written into a design, brand, saved block or export. Generations may be billed by
-            your provider.
-          </p>
-          {!tested && configured && (
-            <p className="text-[11px] text-slate-500">Run Test connection to enable the composer.</p>
-          )}
-        </div>
+      {view === 'settings' ? (
+        <SettingsView
+          onChanged={bumpKeys}
+          onCancelInFlight={cancelInFlight}
+          onDone={() => setView('chat')}
+          hasSession={turns.length > 0}
+        />
       ) : (
-        /* ----------------------------------------------------- chat state */
         <>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
             {turns.length === 0 && (
@@ -367,7 +280,7 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                 {turn.state === 'loading' && (
                   <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-xs text-slate-500">
                     <Loader2 size={13} className="animate-spin" /> Generating…
-                    <button type="button" className={`${btn} ml-auto`} onClick={() => abort.current?.abort()}>
+                    <button type="button" className={`${btn} ml-auto`} onClick={cancelInFlight}>
                       Cancel
                     </button>
                   </div>
@@ -427,7 +340,7 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                         <button
                           type="button"
                           className={btn}
-                          disabled={busy}
+                          disabled={busy || !composerReady}
                           onClick={() => void run(turn.prompt)}
                         >
                           <RefreshCw size={12} /> Regenerate
@@ -456,11 +369,20 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
 
           {/* ------------------------------------------------------ composer */}
           <div className="shrink-0 space-y-2 border-t border-slate-200 px-4 py-3">
-            {!imageHosting.configured && (
-              <p className="rounded bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
-                No image hosting is configured, so a generated image stays a local draft and the
-                export ships a placeholder until you host it yourself.
+            {!activeAdapter || !activeConnected ? (
+              <p className="flex items-start gap-1.5 rounded bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-800">
+                <TriangleAlert size={13} className="mt-px shrink-0" />
+                {activeAdapter
+                  ? `${activeAdapter.name} is not connected. Open AI settings and run Test connection.`
+                  : 'No provider is active. Open AI settings to configure one.'}
               </p>
+            ) : (
+              !imageHosting.configured && (
+                <p className="rounded bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
+                  No image hosting is configured, so a generated image stays a local draft and the
+                  export ships a placeholder until you host it yourself.
+                </p>
+              )
             )}
 
             <div className="flex items-center gap-1.5">
@@ -490,7 +412,8 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
               <textarea
                 aria-label="Image prompt"
                 rows={2}
-                className="min-w-0 flex-1 resize-none rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+                disabled={!composerReady}
+                className="min-w-0 flex-1 resize-none rounded-md border border-slate-300 px-2 py-1.5 text-xs disabled:bg-slate-50"
                 placeholder="A quiet office at sunrise, soft light…"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -508,12 +431,264 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               </button>
             </div>
-            <p className="text-[11px] text-slate-400">
-              {provider.name} · {model}
-            </p>
           </div>
         </>
       )}
     </aside>
+  );
+}
+
+/* ========================================================== settings view */
+
+/**
+ * Every registered provider, its status, and the four actions.
+ *
+ * A key only becomes the stored one after a passing Test connection, so a
+ * failed replacement leaves whatever was working in place.
+ */
+function SettingsView({
+  onChanged,
+  onCancelInFlight,
+  onDone,
+  hasSession,
+}: {
+  onChanged: () => void;
+  onCancelInFlight: () => void;
+  onDone: () => void;
+  hasSession: boolean;
+}) {
+  const [, forceRender] = useState(0);
+  const refresh = () => {
+    forceRender((n) => n + 1);
+    onChanged();
+  };
+
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftKey, setDraftKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [remember, setRemember] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const active = activeProvider();
+
+  const beginEdit = (id: string) => {
+    setEditing(id);
+    setDraftKey('');
+    setShowKey(false);
+    setRemember(isRemembered(id));
+    setErrors((e) => ({ ...e, [id]: '' }));
+  };
+
+  /**
+   * Test, then save only if it passed. The previous key is never touched until
+   * the new one has proven itself.
+   */
+  const testAndSave = async (id: string) => {
+    const adapter = providerById(id);
+    if (!adapter) return;
+    const candidate = draftKey.trim() || loadKey(id)?.key || '';
+    if (!candidate) {
+      setErrors((e) => ({ ...e, [id]: 'Enter an API key first.' }));
+      return;
+    }
+    setTestingId(id);
+    setErrors((e) => ({ ...e, [id]: '' }));
+    try {
+      await adapter.testKey(candidate, new AbortController().signal);
+      const model = loadKey(id)?.model || adapter.models[0];
+      if (saveKey(id, model, candidate, remember) === 'full') {
+        setErrors((e) => ({ ...e, [id]: 'Storage is full, so the key is kept for this session only.' }));
+      }
+      markConnected(id, true);
+      setEditing(null);
+      setDraftKey('');
+      refresh();
+      // configuring the active provider is the first-run path; land on the chat
+      if (activeProvider() === id) onDone();
+    } catch (e) {
+      // the stored key is untouched, which is the point
+      markConnected(id, false);
+      setErrors((err) => ({ ...err, [id]: toAiError(e).message }));
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const makeActive = (id: string) => {
+    onCancelInFlight();
+    setActiveProvider(id);
+    refresh();
+  };
+
+  const remove = (id: string) => {
+    if (id === active) onCancelInFlight();
+    clearKey(id);
+    // fall back to the first connected provider, else leave none active
+    if (id === active) {
+      const next = PROVIDERS.find((p) => p.id !== id && isConnected(p.id));
+      if (next) setActiveProvider(next.id);
+    }
+    if (editing === id) setEditing(null);
+    refresh();
+  };
+
+  return (
+    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+      {hasSession && (
+        <button type="button" className={btn} onClick={onDone}>
+          <ArrowLeft size={12} /> Back to chat
+        </button>
+      )}
+
+      {PROVIDERS.map((provider) => {
+        const status = statusOf(provider.id);
+        const record = loadKey(provider.id);
+        const isActive = provider.id === active;
+        const open = editing === provider.id;
+
+        return (
+          <section key={provider.id} className="rounded-lg border border-slate-200 p-2.5">
+            <div className="flex items-center gap-2">
+              <h3 className="flex-1 truncate text-xs font-semibold text-slate-900">
+                {provider.name}
+                {isActive && (
+                  <span className="ml-1.5 rounded bg-brand-100 px-1 py-0.5 text-[10px] font-bold text-brand-700">
+                    ACTIVE
+                  </span>
+                )}
+              </h3>
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[status]}`}
+              >
+                {STATUS_LABEL[status]}
+              </span>
+            </div>
+
+            {record && !open && (
+              <p className="mt-1 font-mono text-[10px] text-slate-400">{maskKey(record.key)}</p>
+            )}
+
+            {open ? (
+              <div className="mt-2 space-y-2">
+                <div className="flex gap-1">
+                  <input
+                    aria-label={`${provider.name} API key`}
+                    type={showKey ? 'text' : 'password'}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 font-mono text-xs"
+                    placeholder={record ? 'Enter a replacement key' : 'sk-…'}
+                    value={draftKey}
+                    onChange={(e) => setDraftKey(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                    onClick={() => setShowKey((v) => !v)}
+                    className="rounded-md border border-slate-300 px-2 text-slate-500 hover:bg-slate-50"
+                  >
+                    {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+
+                <label className="flex items-start gap-2 text-[11px] leading-snug text-slate-600">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={remember}
+                    onChange={(e) => setRemember(e.target.checked)}
+                  />
+                  <span>
+                    Remember on this device.
+                    <span className="block text-amber-700">
+                      Stored unencrypted in this browser, for this provider only.
+                    </span>
+                  </span>
+                </label>
+
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className={primary}
+                    disabled={testingId === provider.id}
+                    onClick={() => void testAndSave(provider.id)}
+                  >
+                    {testingId === provider.id && <Loader2 size={12} className="animate-spin" />}
+                    {testingId === provider.id ? 'Testing…' : 'Test and save'}
+                  </button>
+                  <button type="button" className={btn} onClick={() => setEditing(null)}>
+                    Cancel
+                  </button>
+                </div>
+                <p className="text-[11px] leading-snug text-slate-400">
+                  The key is only stored once Test connection passes, so a failed attempt leaves
+                  your working key alone.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button type="button" className={btn} onClick={() => beginEdit(provider.id)}>
+                  <Plug size={12} /> {record ? 'Replace key' : 'Add key'}
+                </button>
+                {record && (
+                  <button
+                    type="button"
+                    className={btn}
+                    disabled={testingId === provider.id}
+                    onClick={() => void testAndSave(provider.id)}
+                  >
+                    {testingId === provider.id ? 'Testing…' : 'Test connection'}
+                  </button>
+                )}
+                {record && !isActive && (
+                  <button type="button" className={btn} onClick={() => makeActive(provider.id)}>
+                    <Check size={12} /> Set as active
+                  </button>
+                )}
+                {record && (
+                  <button type="button" className={btn} onClick={() => remove(provider.id)}>
+                    <Trash2 size={12} /> Remove key
+                  </button>
+                )}
+              </div>
+            )}
+
+            {errors[provider.id] && (
+              <p className="mt-1.5 flex items-start gap-1.5 rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">
+                <TriangleAlert size={12} className="mt-px shrink-0" />
+                {errors[provider.id]}
+              </p>
+            )}
+
+            {record && (
+              <label className="mt-2 block">
+                <span className="mb-1 block text-[11px] font-medium text-slate-600">Model</span>
+                <select
+                  aria-label={`${provider.name} model`}
+                  className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                  value={record.model || provider.models[0]}
+                  onChange={(e) => {
+                    setModel(provider.id, e.target.value);
+                    refresh();
+                  }}
+                >
+                  {provider.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </section>
+        );
+      })}
+
+      <p className="text-[11px] leading-snug text-slate-400">
+        Keys stay in this browser — each is sent only to its own provider, and never written into a
+        design, brand, saved block or export. Generations may be billed by your provider.
+      </p>
+    </div>
   );
 }

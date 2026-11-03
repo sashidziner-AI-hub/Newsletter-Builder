@@ -1004,3 +1004,74 @@ result actions, session history, Edit prompt; alt required before use; the brand
 only palette hex and never the logo or footer; an id in the design and never bytes; the export
 free of `data:` and `blob:`; `AI_IMAGE_NOT_HOSTED`, `AI_IMAGE_MISSING_DRAFT` on both a design
 import and a saved-block insert, stable ids, and the never-accuse-before-looking rule.
+
+## Feature 5A — amendment: AI settings and per-provider keys — done (2026-11-03)
+
+### The bug
+
+`AiImagePanel` chose between setup and chat with one expression — `!configured || !tested`
+— and both flags were seeded **once** from `loadKey()` on mount. A saved key therefore put
+the panel straight into chat with no route back, and the only **Remove key** button lived
+inside the setup view it could no longer reach. Once configured, the key was unchangeable
+short of clearing site data.
+
+### What changed
+
+**Settings are now a view, not a state.** `view: 'chat' | 'settings'` is independent of
+whether a key exists, and a ⚙ in the panel header toggles it from either side. Returning to
+chat keeps `turns`, because the session has always lived in panel state. Configuring the
+*active* provider still lands on the chat, which is the first-run path; configuring any other
+leaves you in settings, where you were.
+
+**One key per provider.** `key-store.ts` moves from a single global slot to
+`email-builder:aikeys:v2`, holding `{ activeProviderId, byProvider: { [id]: { model, key } } }`
+— still one storage key, so there remains exactly one place a secret can be and one thing a
+wipe has to clear. Remember-on-device is per provider: remembering OpenAI does not quietly
+remember another. A v1 record migrates into its provider's slot on first read and the old key
+is deleted, so an existing configuration keeps working.
+
+**Status and actions per provider.** `Not configured` / `Configured` / `Connected`, where
+*Connected* comes only from a passing Test connection **this session** — a remembered key is
+`Configured` until proven, rather than trusted because it is on disk. Each provider offers
+Add/Replace key, Test connection, Set as active and Remove key.
+
+**A replacement must prove itself.** The draft key lives in component state and
+`saveKey()` is only called after `testKey()` resolves. A failed replacement leaves the stored
+key untouched and nothing is written — there is a test that asserts the rejected key never
+reaches localStorage.
+
+**Switching or removing cancels, but does not forget.** Both abort any in-flight generation
+through the existing `AbortController`, keep the session messages, and gate the composer on
+the active provider being Connected. Removing the active provider's key falls back to the
+first other Connected provider, else leaves none active and the composer disabled with a
+message saying why. The chat header always reads `Provider: <name> / <model>`.
+
+### A real bug the tests caught
+
+The first version set the active provider **only through the persisted record**. A key saved
+without *Remember on this device* persists nothing, so `activeProvider()` returned null, the
+composer never unlocked, and every UI test timed out. The active pointer is now set in memory
+as well as on disk, so a session-only key works exactly like a remembered one.
+
+### Not done
+
+The brief's item 3 — a second real provider — is **not built**. `<NEW PROVIDER>` arrived as an
+unfilled placeholder, and the adapter cannot be written without the real model names, auth
+header and request shape, nor can the browser CORS check that decides whether it is possible
+at all. The multi-provider behaviour is nonetheless proven: `ai-providers.test.tsx` mocks the
+registry with two fake adapters built on the unchanged `ImageProvider` interface. Adding a
+real one remains one file plus one registry entry.
+
+### Tests
+
+`src/test/ai-providers.test.tsx` (8, new) plus rewrites of the key-store block in
+`ai.test.ts` and the setup flow in `ai-ui.test.tsx`. Suite: **710 passing** (was 694),
+`tsc --noEmit` clean. No real API calls.
+
+Covered: settings reachable from the chat once configured; the provider list with per-provider
+status; two keys side by side with independent remember flags; removing one leaving the other;
+the active pointer surviving a reload and clearing when its provider is removed; v1 migration;
+a failed replacement keeping the old key and storing nothing; removing the active key disabling
+the composer; switching the active provider cancelling an in-flight generation while keeping
+the messages; and a sweep proving **two** providers' keys appear in no design, brand, saved
+block, library record, issue, export, error string, DOM text, or any storage key but the one.
