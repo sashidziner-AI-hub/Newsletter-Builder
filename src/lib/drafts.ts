@@ -40,6 +40,47 @@ export interface DraftStore {
 
 export const newDraftId = () => uid('aidraft');
 
+/* ------------------------------------------------------------ data URIs */
+
+/**
+ * Draft bytes as a `data:` URI, for the canvas and the preview only.
+ *
+ * It has to be `data:` rather than an object URL, for two independent reasons:
+ * `safeUrl()` refuses every scheme but http(s), merge tags and `data:image`,
+ * and DOMPurify strips `blob:` from an `img src`. The preview adds a third —
+ * its iframe is sandboxed without `allow-same-origin`, so a parent-origin
+ * `blob:` could never load inside it.
+ *
+ * Converted once per draft and cached, because the base64 of a 1024px PNG is a
+ * couple of megabytes of string and the canvas re-renders on every edit.
+ */
+const dataUrlCache = new Map<string, string>();
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** The cached data URI for a draft, converting on first use. */
+export async function draftDataUrl(id: string): Promise<string | null> {
+  const cached = dataUrlCache.get(id);
+  if (cached) return cached;
+  const draft = await draftStore.get(id);
+  if (!draft) return null;
+  const url = await blobToDataUrl(draft.blob);
+  dataUrlCache.set(id, url);
+  return url;
+}
+
+/** Drop a converted draft, so removing one frees its megabytes. */
+export function forgetDraftDataUrl(id: string): void {
+  dataUrlCache.delete(id);
+}
+
 /* ------------------------------------------------------------- in-memory */
 
 export function memoryDraftStore(): DraftStore {
@@ -53,6 +94,7 @@ export function memoryDraftStore(): DraftStore {
     },
     async remove(id) {
       map.delete(id);
+      forgetDraftDataUrl(id);
     },
     async keys() {
       return [...map.keys()];
@@ -106,6 +148,7 @@ export function indexedDbDraftStore(): DraftStore {
       await tx('readwrite', (s) => s.put(draft) as IDBRequest<IDBValidKey>);
     },
     async remove(id) {
+      forgetDraftDataUrl(id);
       try {
         await tx('readwrite', (s) => s.delete(id) as unknown as IDBRequest<undefined>);
       } catch {

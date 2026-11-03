@@ -1126,3 +1126,88 @@ Suite: **715 passing** (was 710), `tsc --noEmit` clean. Nine new cases in `ai.te
 per mapping, 403 with an empty message, the same classification from `testKey`, the widened
 key-leak sweep across all six statuses, redaction of a key-shaped string that is *not* the one
 sent, and an echoed `Authorization: Bearer` header.
+
+## Feature 5A — amendment: draft rendering, composer keys, style presets — done (2026-11-03)
+
+### 1. The draft image never rendered
+
+**Root cause, one line:** `safeUrl()` (`src/lib/util.ts`) permits `http(s)`, `mailto:`,
+`tel:`, `//`, merge tags and `data:image/...;base64,` — and returns `''` for every other
+scheme. The canvas was handing it a `blob:` object URL, so `renderBlockInner` took its
+`if (!src) return placeholder(...)` branch and drew "Image — select this block and add an
+image" next to a badge claiming a draft was there.
+
+What was *not* wrong, checked before changing anything: the `aiDraftId` is written to the
+block correctly, and the blob is read back out of IndexedDB correctly. The canvas is also not
+an iframe, so no sandbox was involved there.
+
+Two further layers would have blocked `blob:` even with `safeUrl` widened, which is why the
+fix is `data:` rather than admitting `blob:`:
+
+- DOMPurify's `IS_ALLOWED_URI` has no `blob:`, so it strips the attribute (`purify.cjs.js:956`).
+- The Preview iframe is sandboxed **without** `allow-same-origin`, so a parent-origin `blob:`
+  can never load inside it at all.
+
+Both layers already accept `data:` unchanged — `safeUrl` whitelists it, and DOMPurify allows
+`data:` on an `img src` because `img` is in its default `DATA_URI_TAGS` (`purify.cjs.js:2165`).
+Two tests now pin exactly this, so the next person does not have to rediscover it.
+
+**The fix.** `draftDataUrl(id)` in `src/lib/drafts.ts` converts a draft once and caches it by
+id; `useDraftImages` (`src/components/useDraftImages.ts`) is the single loader shared by the
+canvas and the preview. `OutputOpts.draftImages` carries the result into `substituteDraft()`,
+which writes the bytes when a map is supplied and `AI_DRAFT_PLACEHOLDER_URL` when it is not.
+**Only the canvas and the preview ever supply one**, so an exported document cannot carry
+image bytes by construction rather than by anyone remembering the rule. Removing a draft
+evicts its cached copy.
+
+All five holders — Image, Hero image, Hero card, Article item, Header logo — failed for that
+one reason and are fixed by that one change; each has its own test.
+
+The Preview caption now reads *"…except AI drafts, shown here locally. The export ships a
+placeholder until you host them."* and only when the design actually holds one, because
+showing the draft there would otherwise make the old caption a lie.
+
+*Cost accepted:* a 1024px PNG is ~1–2 MB, so its base64 is ~1.4–2.7 MB held per draft. One
+conversion per id, one splice per change.
+
+### 2. Composer keys
+
+Enter sends, Shift+Enter inserts a newline, and `event.isComposing` returns early so the
+keystroke that commits an IME candidate is never a send. `send()` returns whether it
+dispatched, and the composer is cleared only then — a blocked validation leaves the text
+alone. The 2 s floor, the one-in-flight guard, **Edit prompt** and **Regenerate** are
+unchanged.
+
+### 3. Style presets, model and quality
+
+`src/lib/ai/styles.ts` holds None / Cinematic elegant (default) / Corporate clean / Minimal.
+The suffix is appended at send time only, so the composer keeps the user's own words and
+round-trips through Edit prompt; the result card names the style. Order is
+`prompt + style + brand`, so **Brand colours** still stacks on top.
+
+**Checked against the current OpenAI spec rather than assumed:** `gpt-image-2` is already a
+listed model id, so it simply becomes the first entry and therefore the default;
+`quality` is documented as supporting `low`/`medium`/`high` across the GPT image models, which
+is exactly the selector offered (low labelled **Draft**, default **high**); there is no
+gpt-image-2-specific parameter, and `size` / `output_format` are unchanged. `quality` is
+omitted from the body entirely when unset.
+
+*Note:* `gpt-image-2` costs more per image than the previous `gpt-image-1-mini` default. Draft
+quality is the cheap path for iterating.
+
+### Two test assertions that were wrong
+
+- `expect(prompt).not.toContain('logo')` was a sloppy proxy for "no brand asset is sent" — the
+  Cinematic suffix legitimately contains "no logos". It now asserts no URL and no brand name.
+- A cancel test asserted the Generate button was enabled afterwards; clearing the composer on
+  send correctly disables it. It now asserts the composer is enabled and empty.
+
+### Tests
+
+`src/test/ai-draft-render.test.tsx` (17, new) plus composer and style blocks in
+`ai-ui.test.tsx`. Suite: **741 passing** (was 715), `tsc --noEmit` clean.
+
+Verified in a real browser with a byte-checked 16×16 red PNG seeded into IndexedDB: the image
+renders on the canvas with the AI-draft badge and no placeholder text, the Preview carries the
+bytes and the amended caption, and the same design exports at 3,957 characters with
+`placehold.co` present and **no** `data:`, `blob:` or draft id. Console clean.

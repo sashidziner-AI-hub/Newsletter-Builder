@@ -503,7 +503,9 @@ describe('the OpenAI adapter', () => {
   it('lists current model ids and no retired one', () => {
     expect(openAiProvider.models.length).toBeGreaterThan(0);
     expect(openAiProvider.models).not.toContain('gpt-image-1');
-    expect(openAiProvider.models[0]).toBe('gpt-image-1-mini');
+    // the default is the better image; the cheap one is still one line below
+    expect(openAiProvider.models[0]).toBe('gpt-image-2');
+    expect(openAiProvider.models).toContain('gpt-image-1-mini');
   });
 });
 

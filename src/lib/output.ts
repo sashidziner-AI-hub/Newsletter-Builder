@@ -21,6 +21,15 @@ import { type DarkCtx, darkBrand, darkColors, darkCtx, prepareDarkDesign } from 
 export interface OutputOpts {
   /** preview only: render tags as these values instead of formatting them */
   sampleData?: Record<string, string> | null;
+  /**
+   * 5A: AI drafts as `data:` URIs, keyed by draft id.
+   *
+   * Supplied by the canvas and the preview and by nothing else, which is what
+   * keeps the export honest: with no map, a draft becomes the placeholder URL,
+   * so an exported document cannot carry image bytes by construction rather
+   * than by anyone remembering not to.
+   */
+  draftImages?: Record<string, string>;
 }
 
 export interface UtmStats {
@@ -84,13 +93,22 @@ const AI_URL_FIELDS = ['src', 'imageSrc', 'logoSrc'] as const;
  */
 export const AI_DRAFT_PLACEHOLDER_URL = 'https://placehold.co/600x400?text=AI+image+not+hosted';
 
-/** Swap a draft reference for the placeholder. The id itself is left in place
- *  so the checks engine can still tell this block apart from a real placeholder. */
-function substituteDraft(holder: Record<string, unknown>): void {
-  if (typeof holder.aiDraftId !== 'string' || !holder.aiDraftId.trim()) return;
+/**
+ * Swap a draft reference for something renderable: the real bytes when the
+ * caller supplied them, the placeholder otherwise. The id itself is left in
+ * place so the checks engine can still tell this block apart from a block that
+ * genuinely holds a placeholder URL.
+ */
+function substituteDraft(
+  holder: Record<string, unknown>,
+  draftImages?: Record<string, string>,
+): void {
+  const id = holder.aiDraftId;
+  if (typeof id !== 'string' || !id.trim()) return;
+  const replacement = draftImages?.[id] || AI_DRAFT_PLACEHOLDER_URL;
   for (const field of AI_URL_FIELDS) {
     if (typeof holder[field] === 'string') {
-      holder[field] = AI_DRAFT_PLACEHOLDER_URL;
+      holder[field] = replacement;
       return;
     }
   }
@@ -127,9 +145,10 @@ export function resolveForOutput(
 
   const next = produce(branded, (draft) => {
     const visit = (holder: Record<string, unknown>) => {
-      // an unhosted AI draft never leaves this browser as bytes. The canvas
-      // keeps the real image, so this is export-only.
-      if (mode === 'export') substituteDraft(holder);
+      // an unhosted AI draft never leaves this browser as bytes: without a
+      // draftImages map this writes the placeholder, and only the canvas and
+      // the preview ever pass one
+      if (mode === 'export' || opts.draftImages) substituteDraft(holder, opts.draftImages);
       // links first, while tags are still canonical
       if (taggingOn) {
         for (const { url, flag } of LINK_FIELDS) {

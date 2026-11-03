@@ -1,13 +1,13 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import DOMPurify from 'dompurify';
 import { Copy, GripVertical, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
 import type { Block, BodySettings, Column, Design, Device, Row } from '../types';
 import { BLOCK_META } from '../lib/defaults';
-import { draftStore } from '../lib/drafts';
 import { resolvedDesign } from '../lib/output';
 import { columnWidths, renderBlock } from '../lib/render';
 import { useActiveBrand, useEditor, useSampleData } from '../store';
+import { draftIdsOf, useDraftImages } from './useDraftImages';
 import { DropLine, useDropHint } from './dnd';
 import { DELETE_BLOCK, DELETE_ROW, useConfirm } from './ConfirmDialog';
 
@@ -17,66 +17,8 @@ function sanitize(html: string): string {
   return DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
 }
 
-/**
- * 5A: the object URLs for whatever AI drafts a block references.
- *
- * The design carries ids, not bytes, so the canvas is where a draft becomes
- * something an <img> can show. A draft this browser does not hold resolves to
- * `null`, which is a normal state — an imported design or a saved block from
- * another machine arrives exactly that way — and the block then says so
- * instead of rendering a broken image.
- */
-function useDraftUrls(ids: string[]): Record<string, string | null> {
-  const key = ids.join(',');
-  const [urls, setUrls] = useState<Record<string, string | null>>({});
-
-  useEffect(() => {
-    if (!key) return;
-    let live = true;
-    const made: string[] = [];
-    void (async () => {
-      const next: Record<string, string | null> = {};
-      for (const id of key.split(',')) {
-        const draft = await draftStore.get(id);
-        if (!draft) {
-          next[id] = null;
-          continue;
-        }
-        const url = URL.createObjectURL(draft.blob);
-        made.push(url);
-        next[id] = url;
-      }
-      if (live) setUrls(next);
-      else for (const u of made) URL.revokeObjectURL(u);
-    })();
-    return () => {
-      live = false;
-      for (const u of made) URL.revokeObjectURL(u);
-    };
-  }, [key]);
-
-  return urls;
-}
-
-/** Every `aiDraftId` under a block, including the ones on cards and items. */
-function draftIdsOf(block: Block): string[] {
-  const values = block.values as unknown as Record<string, unknown>;
-  const out: string[] = [];
-  const take = (holder: Record<string, unknown>) => {
-    if (typeof holder.aiDraftId === 'string' && holder.aiDraftId.trim()) out.push(holder.aiDraftId);
-  };
-  take(values);
-  for (const key of ['items', 'cards']) {
-    const arr = values[key];
-    if (Array.isArray(arr)) {
-      for (const item of arr) if (item && typeof item === 'object') take(item as Record<string, unknown>);
-    }
-  }
-  return out;
-}
-
-/** Put the resolved URLs into a copy of the block, for rendering only. */
-function withDraftUrls(block: Block, urls: Record<string, string | null>): Block {
+/** Put the resolved draft images into a copy of the block, for rendering only. */
+function withDraftImages(block: Block, urls: Record<string, string | null>): Block {
   const ids = draftIdsOf(block);
   if (ids.length === 0) return block;
 
@@ -142,7 +84,7 @@ const BlockView = memo(function BlockView({
 
   // Only the properties that affect rendering are dependencies; `body` fields used by the renderer are listed explicitly.
   const draftIds = useMemo(() => draftIdsOf(block), [block]);
-  const draftUrls = useDraftUrls(draftIds);
+  const draftUrls = useDraftImages(draftIds);
   /** a referenced draft this browser does not hold */
   const missingDraft = draftIds.some((id) => id in draftUrls && draftUrls[id] === null);
   const hasDraft = draftIds.length > 0 && !missingDraft;
@@ -151,7 +93,7 @@ const BlockView = memo(function BlockView({
     () =>
       sanitize(
         renderBlock(
-          withDraftUrls(block, draftUrls),
+          withDraftImages(block, draftUrls),
           { version: 1, brandId: null, body, rows: [] },
           { colWidth, editor: true },
         ),

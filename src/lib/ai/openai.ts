@@ -32,11 +32,17 @@ import { decodeBase64, readPngSize, toImageBlob } from './validate';
 
 const BASE = 'https://api.openai.com/v1';
 
-/** Newest first; the first entry is the panel's default. */
+/**
+ * The first entry is the panel's default.
+ *
+ * `gpt-image-2` leads because it is the better image for a marketing hero;
+ * `gpt-image-1-mini` stays one line below as the cheap one to iterate on, and
+ * the Draft quality setting is the other half of that.
+ */
 export const OPENAI_MODELS = [
+  'gpt-image-2',
   'gpt-image-1-mini',
   'gpt-image-1.5',
-  'gpt-image-2',
   'gpt-image-2.5-sunburst',
   'gpt-image-2.5-flare',
   'chatgpt-image-latest',
@@ -190,6 +196,7 @@ async function requestImage(
   model: string,
   prompt: string,
   size: string,
+  quality: string | undefined,
   signal: AbortSignal,
 ): Promise<Response> {
   return fetch(`${BASE}/images/generations`, {
@@ -202,6 +209,8 @@ async function requestImage(
       size,
       n: 1,
       output_format: 'png',
+      // omitted entirely when unset, so the model picks its own default
+      ...(quality ? { quality } : {}),
     }),
   });
 }
@@ -240,12 +249,12 @@ export const openAiProvider: ImageProvider = {
     const { size, fallback } = sizeFor(req);
     const t = withTimeout(req.signal);
     try {
-      let res = await requestImage(key, req.model, prompt, size, t.signal);
+      let res = await requestImage(key, req.model, prompt, size, req.quality, t.signal);
 
       // 16:9 and 4:3 are custom sizes; a model that will not take one gets the
       // nearest documented size rather than an error the user cannot act on
       if (!res.ok && res.status === 400 && size !== fallback) {
-        res = await requestImage(key, req.model, prompt, fallback, t.signal);
+        res = await requestImage(key, req.model, prompt, fallback, req.quality, t.signal);
       }
       if (!res.ok) throw await classify(res, key);
 

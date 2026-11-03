@@ -12,12 +12,20 @@
 /** What the panel offers; the adapter maps these onto the provider's own sizes. */
 export type AspectChoice = 'match' | '1:1' | '16:9' | '3:2' | '4:3';
 
+/**
+ * low / medium / high are the values the current OpenAI spec documents as
+ * supported by every GPT image model. The 2.5 variants also take xhigh and
+ * max, which are not offered here.
+ */
+export type ImageQuality = 'low' | 'medium' | 'high';
+
 export interface GenerateRequest {
   prompt: string;
   aspect: AspectChoice;
   /** the block's rendered width in px, for 'match' */
   blockWidth: number;
   model: string;
+  quality?: ImageQuality;
   signal: AbortSignal;
 }
 

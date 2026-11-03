@@ -19,9 +19,11 @@ import {
   AiError,
   MIN_REQUEST_GAP_MS,
   type AspectChoice,
+  type ImageQuality,
   normalizeKey,
   toAiError,
 } from '../lib/ai/provider';
+import { DEFAULT_STYLE_ID, STYLE_PRESETS, composePrompt, styleById } from '../lib/ai/styles';
 import { PROVIDERS, providerById } from '../lib/ai/openai';
 import {
   type ProviderStatus,
@@ -63,10 +65,18 @@ const STATUS_STYLE: Record<ProviderStatus, string> = {
   connected: 'bg-emerald-100 text-emerald-800',
 };
 
+const QUALITIES: { value: ImageQuality; label: string }[] = [
+  { value: 'low', label: 'Draft' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
 /** One turn in the session. Results are held in memory; nothing here persists. */
 interface Turn {
   id: string;
   prompt: string;
+  /** the style that produced it, named on the card */
+  styleName: string;
   state: 'loading' | 'done' | 'error';
   draft?: DraftImage;
   objectUrl?: string;
@@ -102,6 +112,8 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
 
   const [prompt, setPrompt] = useState(target.seed ? `${target.seed}` : '');
   const [aspect, setAspect] = useState<AspectChoice>('match');
+  const [styleId, setStyleId] = useState(DEFAULT_STYLE_ID);
+  const [quality, setQuality] = useState<ImageQuality>('high');
   const [useBrandColors, setUseBrandColors] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -148,7 +160,8 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     }
     setBusy(true);
     const id = newDraftId();
-    setTurns((prev) => [...prev, { id, prompt: text, state: 'loading' }]);
+    const style = styleById(styleId);
+    setTurns((prev) => [...prev, { id, prompt: text, styleName: style.name, state: 'loading' }]);
 
     const since = Date.now() - lastSent.current;
     if (since < MIN_REQUEST_GAP_MS) {
@@ -158,12 +171,14 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
 
     const ctl = new AbortController();
     abort.current = ctl;
-    const full = useBrandColors ? text + brandSuffix : text;
+    // style first, brand second — the palette should qualify the style, not
+    // be buried under it
+    const full = composePrompt(text, styleId, useBrandColors ? brandSuffix : '');
     const model = loadKey(active)?.model || activeAdapter.models[0];
 
     try {
       const result = await activeAdapter.generate(
-        { prompt: full, aspect, blockWidth: target.blockWidth, model, signal: ctl.signal },
+        { prompt: full, aspect, blockWidth: target.blockWidth, model, quality, signal: ctl.signal },
         key,
       );
       const draft: DraftImage = {
@@ -191,10 +206,16 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     }
   };
 
-  const send = () => {
+  /**
+   * Returns whether the send was accepted. The composer is cleared only then:
+   * a blocked validation must leave what was typed alone.
+   */
+  const send = (): boolean => {
     const text = prompt.trim();
-    if (!text || !composerReady || busy) return;
+    if (!text || !composerReady || busy) return false;
     void run(text);
+    setPrompt('');
+    return true;
   };
 
   /* ------------------------------------------------------------- using */
@@ -306,6 +327,11 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                       alt={turn.prompt}
                       className="mb-2 w-full rounded bg-slate-100"
                     />
+                    {turn.styleName && turn.styleName !== 'None' && (
+                      <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-400">
+                        Style: {turn.styleName}
+                      </p>
+                    )}
                     {altFor === turn.id ? (
                       <div className="space-y-1.5">
                         <label className="block">
@@ -404,6 +430,33 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                   </option>
                 ))}
               </select>
+              <select
+                aria-label="Image style"
+                className="min-w-0 flex-1 rounded-md border border-slate-300 px-1.5 py-1 text-[11px]"
+                value={styleId}
+                onChange={(e) => setStyleId(e.target.value)}
+              >
+                {STYLE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                aria-label="Image quality"
+                className="min-w-0 flex-1 rounded-md border border-slate-300 px-1.5 py-1 text-[11px]"
+                value={quality}
+                onChange={(e) => setQuality(e.target.value as ImageQuality)}
+              >
+                {QUALITIES.map((q) => (
+                  <option key={q.value} value={q.value}>
+                    {q.label}
+                  </option>
+                ))}
+              </select>
               <label className="flex items-center gap-1 text-[11px] text-slate-600">
                 <input
                   type="checkbox"
@@ -424,7 +477,13 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+                  if (e.key !== 'Enter') return;
+                  // an IME commits its candidate with Enter; that keystroke
+                  // belongs to the input method, not to us
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.shiftKey) return; // newline
+                  e.preventDefault();
+                  send();
                 }}
               />
               <button

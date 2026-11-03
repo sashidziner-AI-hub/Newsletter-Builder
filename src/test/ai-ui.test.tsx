@@ -229,8 +229,10 @@ describe('generating', () => {
     fireEvent.click(screen.getByText('Cancel'));
 
     await waitFor(() => expect(screen.getByText('Generation cancelled.')).toBeTruthy());
-    // and the composer is usable again
-    expect((screen.getByLabelText('Generate') as HTMLButtonElement).disabled).toBe(false);
+    // the composer is usable again — and empty, because the send went through
+    const box = screen.getByLabelText('Image prompt') as HTMLTextAreaElement;
+    expect(box.disabled).toBe(false);
+    expect(box.value).toBe('');
   });
 
   it('sends the brand palette only when the toggle is on, and never the logo', async () => {
@@ -246,8 +248,155 @@ describe('generating', () => {
       fetchMock.mock.calls.filter((c) => String(c[0]).includes('generations')).pop()![1].body,
     );
     expect(body.prompt).toContain(vee.tokens.colors.primary);
-    expect(body.prompt).not.toContain('logo');
+    // no brand asset or footer copy rides along — only palette hex values
+    expect(body.prompt).not.toMatch(/https?:/);
+    expect(body.prompt).not.toContain(vee.name);
     expect(body.prompt).not.toContain(vee.footer.unsubscribe_text);
+  });
+});
+
+/* -------------------------------------------------------------- composer */
+
+describe('the composer', () => {
+  async function ready() {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Image'));
+    fireEvent.click(screen.getByText('Generate with AI'));
+    await configureKey();
+    fetchMock.mockImplementation(json({ data: [{ b64_json: PNG_B64 }] }));
+    return screen.getByLabelText('Image prompt') as HTMLTextAreaElement;
+  }
+
+  const sentPrompts = () =>
+    fetchMock.mock.calls
+      .filter((c) => String(c[0]).includes('generations'))
+      .map((c) => JSON.parse(c[1].body).prompt as string);
+
+  it('sends on Enter and clears', async () => {
+    const box = await ready();
+    fireEvent.change(box, { target: { value: 'a quiet office' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.getByText('Use this image')).toBeTruthy(), { timeout: 5000 });
+    expect(box.value).toBe('');
+  });
+
+  it('does not send on Shift+Enter', async () => {
+    const box = await ready();
+    fireEvent.change(box, { target: { value: 'line one' } });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+
+    expect(screen.queryByText('Generating\u2026')).toBeNull();
+    expect(box.value).toBe('line one');
+    expect(sentPrompts()).toHaveLength(0);
+  });
+
+  it('ignores Enter while an IME composition is active', async () => {
+    const box = await ready();
+    fireEvent.change(box, { target: { value: 'konnichiwa' } });
+    // the keystroke that commits an IME candidate belongs to the input method
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+
+    expect(screen.queryByText('Generating\u2026')).toBeNull();
+    expect(box.value).toBe('konnichiwa');
+    expect(sentPrompts()).toHaveLength(0);
+  });
+
+  it('keeps the text when validation blocks the send', async () => {
+    const box = await ready();
+    // whitespace only: refused, so nothing is cleared and nothing is sent
+    fireEvent.change(box, { target: { value: '   ' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(box.value).toBe('   ');
+    expect(sentPrompts()).toHaveLength(0);
+  });
+
+  it('Edit prompt still prefills, and Regenerate still reuses the prompt', async () => {
+    const box = await ready();
+    fireEvent.change(box, { target: { value: 'a quiet office' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByText('Use this image')).toBeTruthy(), { timeout: 5000 });
+    expect(box.value).toBe('');
+
+    fireEvent.click(screen.getByText('Edit prompt'));
+    expect((screen.getByLabelText('Image prompt') as HTMLTextAreaElement).value).toBe(
+      'a quiet office',
+    );
+
+    fireEvent.click(screen.getByText('Regenerate'));
+    await waitFor(() => expect(screen.getAllByText('Use this image')).toHaveLength(2), {
+      timeout: 8000,
+    });
+    expect(sentPrompts()[1]).toContain('a quiet office');
+  });
+});
+
+/* ---------------------------------------------------------------- styles */
+
+describe('style presets', () => {
+  async function ready() {
+    render(<App />);
+    fireEvent.click(screen.getByTitle('Add Image'));
+    fireEvent.click(screen.getByText('Generate with AI'));
+    await configureKey();
+    fetchMock.mockImplementation(json({ data: [{ b64_json: PNG_B64 }] }));
+  }
+
+  const lastBody = () =>
+    JSON.parse(
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes('generations')).pop()![1].body,
+    );
+
+  const send = async (text: string) => {
+    const box = screen.getByLabelText('Image prompt') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: text } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByText('Use this image')).toBeTruthy(), { timeout: 5000 });
+    return box;
+  };
+
+  it('appends the default Cinematic suffix without showing it in the composer', async () => {
+    await ready();
+    const box = await send('a quiet office');
+
+    const sent = lastBody().prompt as string;
+    expect(sent).toContain('a quiet office');
+    expect(sent).toContain('Cinematic, elegant, photorealistic');
+    expect(sent).toContain('No text, no logos, no watermark');
+    expect(screen.getByText('Style: Cinematic elegant')).toBeTruthy();
+    expect(box.value).toBe('');
+  });
+
+  it('sends nothing extra on None', async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText('Image style'), { target: { value: 'none' } });
+    await send('a quiet office');
+
+    expect(lastBody().prompt).toBe('a quiet office');
+    expect(screen.queryByText(/^Style:/)).toBeNull();
+  });
+
+  it('stacks the brand palette on top of a style', async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText('Image style'), { target: { value: 'minimal' } });
+    fireEvent.click(screen.getByLabelText('Brand colours', { selector: 'input' }));
+    await send('a quiet office');
+
+    const sent = lastBody().prompt as string;
+    expect(sent).toContain('Minimal composition');
+    expect(sent).toContain(vee.tokens.colors.primary);
+    expect(sent.indexOf('Minimal composition')).toBeLessThan(
+      sent.indexOf(vee.tokens.colors.primary),
+    );
+  });
+
+  it('sends the chosen quality and the new default model', async () => {
+    await ready();
+    fireEvent.change(screen.getByLabelText('Image quality'), { target: { value: 'low' } });
+    await send('a quiet office');
+
+    expect(lastBody().quality).toBe('low');
+    expect(lastBody().model).toBe('gpt-image-2');
   });
 });
 

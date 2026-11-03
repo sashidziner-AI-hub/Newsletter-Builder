@@ -28,6 +28,7 @@ import {
   type SavedTemplate,
 } from '../lib/storage';
 import { useAccessibleBrands, useActiveBrand, useEditor, useVisibleIssues } from '../store';
+import { draftIdsInDesign, useDraftImages } from './useDraftImages';
 import { useConfirm } from './ConfirmDialog';
 
 export function Modal({
@@ -100,17 +101,38 @@ export function PreviewModal({ onClose }: { onClose: () => void }) {
   // tokens, UTM and merge-tag formatting all included. The dark preview is the
   // same HTML with the same rules, forced on through an attribute rather than
   // the media query — there is no second renderer.
+  // 5A: an unhosted draft is shown here as its real bytes, which the export
+  // cannot do. The caption below says so rather than quietly lying.
+  const draftIds = useMemo(() => draftIdsInDesign(design), [design]);
+  const draftUrls = useDraftImages(draftIds);
+  const draftImages = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [id, url] of Object.entries(draftUrls)) if (url) out[id] = url;
+    return out;
+  }, [draftUrls]);
+  const showingDrafts = Object.keys(draftImages).length > 0;
+
   const html = useMemo(
     () =>
-      renderDesign(resolvedDesign(design, brand, 'export'), darkRenderOpts(design, brand, dark)),
-    [design, brand, dark],
+      renderDesign(
+        resolvedDesign(design, brand, 'export', { draftImages }),
+        darkRenderOpts(design, brand, dark),
+      ),
+    [design, brand, dark, draftImages],
   );
 
   return (
     <Modal title="Preview" onClose={onClose} wide>
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-2">
         <p className="text-xs text-slate-500">
-          This is the exact HTML that will be exported.
+          {showingDrafts ? (
+            <>
+              This is the exact HTML that will be exported &mdash; except AI drafts, shown here
+              locally. The export ships a placeholder until you host them.
+            </>
+          ) : (
+            'This is the exact HTML that will be exported.'
+          )}
           {dark && (
             <span className="ml-2 text-amber-700">
               Gmail apps apply their own automatic colour inversion and ignore these rules. Apple
