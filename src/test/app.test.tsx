@@ -735,6 +735,74 @@ describe('App', () => {
     });
   });
 
+  describe('dark mode', () => {
+    beforeEach(() => act(() => s().setChecksOpen(false)));
+
+    it('previews dark through the same rules, and leaves the light preview alone', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+
+      fireEvent.click(screen.getByTitle('Preview'));
+      const light = screen.getByTitle('Email preview') as HTMLIFrameElement;
+      expect(light.srcdoc).not.toContain('data-eb-dark');
+      // the rules still ship, because dark support is on by default
+      expect(light.srcdoc).toContain('@media (prefers-color-scheme: dark)');
+
+      fireEvent.click(within(screen.getByRole('dialog')).getByText('Dark'));
+      const dark = screen.getByTitle('Email preview') as HTMLIFrameElement;
+      expect(dark.srcdoc).toContain('data-eb-dark="1"');
+      expect(dark.srcdoc).toContain('[data-eb-dark] .dm-');
+      // same stylesheet, forced on — not a second renderer
+      expect(dark.srcdoc).toContain('@media (prefers-color-scheme: dark)');
+    });
+
+    it('the top-bar toggle is disabled while dark support is off', () => {
+      render(<App />);
+      act(() => s().updateBody({ darkMode: false }));
+      expect((screen.getByLabelText('Dark preview') as HTMLButtonElement).disabled).toBe(true);
+      act(() => s().updateBody({ darkMode: true }));
+      expect((screen.getByLabelText('Dark preview') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('raises a dark contrast error in the drawer, with a stable id', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      const selection = s().selection;
+      const blockId = selection.kind === 'block' ? selection.id : '';
+      // perfectly readable on white, invisible on the dark content panel
+      act(() => s().updateBlock(blockId, { color: '#111111' }));
+      act(() => s().updateBody({ contentBgColor: 'brand.content_bg' }));
+      act(() => s().runChecks());
+
+      const first = s().issues.find((i) => i.code === 'CONTRAST_TEXT_DARK');
+      expect(first).toBeTruthy();
+
+      act(() => s().setChecksOpen(true));
+      const drawer = within(screen.getByRole('complementary', { name: 'Checks' }));
+      expect(drawer.getByText(/In dark mode/)).toBeTruthy();
+
+      // the id survives an unrelated edit, so ignoring it sticks
+      act(() => s().updateBody({ title: 'A different subject' }));
+      act(() => s().runChecks());
+      expect(s().issues.find((i) => i.code === 'CONTRAST_TEXT_DARK')!.id).toBe(first!.id);
+    });
+
+    it('turning dark support off clears the dark issues', () => {
+      render(<App />);
+      fireEvent.click(screen.getByTitle('Add Heading'));
+      const selection = s().selection;
+      const blockId = selection.kind === 'block' ? selection.id : '';
+      act(() => s().updateBlock(blockId, { color: '#111111' }));
+      act(() => s().updateBody({ contentBgColor: 'brand.content_bg' }));
+      act(() => s().runChecks());
+      expect(s().issues.some((i) => i.code === 'CONTRAST_TEXT_DARK')).toBe(true);
+
+      act(() => s().updateBody({ darkMode: false }));
+      act(() => s().runChecks());
+      expect(s().issues.some((i) => i.code === 'CONTRAST_TEXT_DARK')).toBe(false);
+    });
+  });
+
   it('keeps auto-saved drafts separate from named templates', () => {
     render(<App />);
     fireEvent.click(screen.getByTitle('Add Heading'));

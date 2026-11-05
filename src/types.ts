@@ -1,5 +1,8 @@
 export type Align = 'left' | 'center' | 'right';
 
+/** Which colour scheme the preview is showing (3B). */
+export type Scheme = 'light' | 'dark';
+
 export interface Padding {
   top: number;
   right: number;
@@ -32,6 +35,8 @@ export interface HeadingValues {
   fontFamily: string; // '' = inherit from body
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface TextValues {
@@ -42,10 +47,19 @@ export interface TextValues {
   fontFamily: string;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface ImageValues {
   src: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   alt: string;
   href: string;
   /** exclude this link from UTM tagging */
@@ -54,6 +68,8 @@ export interface ImageValues {
   align: Align;
   borderRadius: number;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface ButtonValues {
@@ -73,6 +89,8 @@ export interface ButtonValues {
   fullWidth: boolean;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface DividerValues {
@@ -82,6 +100,8 @@ export interface DividerValues {
   width: number; // percent
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface MenuItem {
@@ -102,6 +122,8 @@ export interface MenuValues {
   itemPadding: number;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export type SocialNetwork =
@@ -134,6 +156,8 @@ export interface SocialValues {
   gap: number;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface VideoValues {
@@ -148,11 +172,15 @@ export interface VideoValues {
   caption: string;
   captionColor: string;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface HtmlValues {
   html: string;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 /* ------------------------------------------------- composite blocks (1B) */
@@ -170,6 +198,12 @@ export interface HeaderValues {
   logoSrc: string;
   logoAlt: string;
   logoWidth: number;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
   /** shown when the logo resolves to nothing — 'brand.name' by default */
   fallbackText: string;
   fallbackColor: string;
@@ -189,11 +223,20 @@ export interface HeaderValues {
   borderWidth: number;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface HeroCard {
   id: string;
   imageSrc: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   imageAlt: string;
   title: string;
   text: string;
@@ -216,6 +259,12 @@ export interface HeroValues {
   subtextFontSize: number;
   imageSrc: string;
   imageAlt: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
   ctaLabel: string;
   ctaHref: string;
   ctaNoTrack?: boolean;
@@ -231,6 +280,8 @@ export interface HeroValues {
   bgImage: string;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface FooterValues {
@@ -261,11 +312,20 @@ export interface FooterValues {
   borderWidth: number;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export interface ArticleItem {
   id: string;
   imageSrc: string;
+  /**
+   * 5A: a generated image held in this browser's IndexedDB. The design never
+   * carries bytes, and the export never carries this — the boundary swaps it
+   * for a placeholder https URL so the existing placeholder warning fires.
+   */
+  aiDraftId?: string;
+
   imageAlt: string;
   title: string;
   excerpt: string;
@@ -292,6 +352,8 @@ export interface ArticleListValues {
   bgColor: string;
   align: Align;
   padding: Padding;
+  /** optional dark-mode colours for this block */
+  dark?: DarkOverrides;
 }
 
 export type Block =
@@ -314,6 +376,15 @@ export interface Column {
   blocks: Block[];
 }
 
+/**
+ * A manual dark-mode override (3B). Absent means "follow the dark palette for
+ * brand colours, and leave a hand-picked hex exactly as it is".
+ */
+export interface DarkOverrides {
+  bgColor?: string;
+  textColor?: string;
+}
+
 export interface Row {
   id: string;
   layout: number[]; // column ratios, e.g. [1,2]
@@ -321,6 +392,8 @@ export interface Row {
   contentBgColor: string; // background of the content area ('' = use body content color)
   padding: Padding;
   stackOnMobile: boolean;
+  /** optional dark-mode colours for this row */
+  dark?: DarkOverrides;
   columns: Column[];
 }
 
@@ -363,6 +436,11 @@ export interface BodySettings {
   mergeCustom: MergeCustomFormat;
   /** UTM parameters, applied to http(s) links at export time only */
   utm: UtmSettings;
+  /**
+   * When false the export is byte-identical to a pre-3B one: no meta tags, no
+   * style block, no class names.
+   */
+  darkMode: boolean;
 }
 
 export interface Design {
@@ -400,6 +478,22 @@ export interface BrandColors {
   page_bg: string;
   content_bg: string;
   border: string;
+}
+
+/**
+ * The dark half of a brand kit (3B). Null on every brand saved before 3B, and
+ * on any brand whose owner has not filled it in; `darkColors()` derives a safe
+ * palette in that case, so dark mode works without anyone configuring it.
+ */
+export interface BrandDarkColors {
+  page_bg: string;
+  content_bg: string;
+  text: string;
+  muted: string;
+  link: string;
+  border: string;
+  button_bg: string;
+  button_text: string;
 }
 
 export interface BrandFonts {
@@ -446,6 +540,8 @@ export interface Brand {
   logo_dark_url: string;
   website_url: string;
   tokens: BrandTokens;
+  /** null means "derive one"; see BrandDarkColors */
+  darkTokens: BrandDarkColors | null;
   footer: BrandFooter;
   social_links: BrandSocialLink[];
   is_active: boolean;
@@ -454,4 +550,6 @@ export interface Brand {
   /** nullable today; becomes a user reference when accounts exist */
   createdBy: string | null;
   updatedBy: string | null;
+  /** absent on brands saved before 3B, which read as version 1 */
+  schemaVersion: number;
 }

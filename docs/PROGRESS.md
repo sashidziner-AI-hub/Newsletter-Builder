@@ -756,3 +756,523 @@ drawer still open; Ignore dropping the badge from `1 error, 1 warning` to `0 err
 and surviving a reload via `email-builder:ignored:v1`; the unsubscribe warning with the footer
 off; typing a readable hex clearing the error live with no reload; and the export dialog
 agreeing at `1 warning` with Copy and Download both enabled and no `Gmail clips` string left.
+
+## Feature 3B — Dark mode support — done (2026-10-30)
+
+### The shape of it
+
+Light mode never changes. Dark mode is **additive only**: class names beside the inline
+styles, two meta tags, and one `<style>` block. With **Dark mode support** off the exported
+HTML is byte-identical to a pre-3B export — guarded by a snapshot per preset recorded against
+the old renderer before a line of 3B was written.
+
+Measured on the Newsletter preset: dark support costs **2,031 bytes** (19,657 vs 17,626).
+
+### How a dark colour is decided
+
+Not in the renderer. `darkBrand()` swaps the brand's colour tokens for the dark palette and
+the design is resolved a **second time** through the existing 2A boundary:
+
+```ts
+const light = resolveForOutput(design, brand, 'export').design;
+const dark  = resolveForOutput(design, darkBrand(brand), 'export').design;
+```
+
+Which gives the rule the feature asks for with no provenance tracking at all:
+
+- a colour that came from a `brand.*` token differs between the passes → it moves, and the
+  renderer emits a class
+- a hex somebody typed by hand is identical in both passes → no class, so it stays exactly
+  as it is
+
+A per-block or per-row **Dark** override beats both, and is applied to the dark pass in
+`prepareDarkDesign()`.
+
+### Where the role mapping bites, and what was done about it
+
+A brand kit names colours by identity (`primary`, `secondary`, `accent`), not by role, and the
+presets use several of them **both ways round**. Swapping the palette wholesale got two cases
+backwards, both badly rather than subtly, and both were caught by the dark contrast checks
+during development rather than by eye:
+
+- **An ink colour used as a background.** The Promotional hero paints its panel with
+  `brand.secondary` (near-black). Mapped as "strong text" it flipped to `#E5E7EB` — a dark
+  panel turning white. Now an ink colour used as a panel simply stays.
+- **A surface colour used as a foreground.** `brand.content_bg` is how the presets write
+  "white text on the brand colour". Following the surface down turned button labels near-black
+  on a dark fill. Now it becomes whatever actually reads on the background that label sits on
+  — the button's own fill for a button, the block's panel otherwise.
+
+The second one is why the Newsletter preset's orange CTA keeps a readable label in dark mode.
+
+### Class names
+
+Six shared classes (`.dm-page`, `.dm-content`, `.dm-text`, `.dm-link`, `.dm-border`,
+`.dm-btn`) cover the common cases; anything else mints a deterministic per-colour class from
+the hex itself (`.dm-t1a1a1a`). Every rule carries `!important`, or the inline style would
+win. Rules are pruned against the rendered HTML before they ship, because a class is minted
+while a colour is being considered — slightly before the element is known to render at all,
+as an empty hero eyebrow proves.
+
+Each rule is written three times: inside `@media (prefers-color-scheme: dark)`, behind
+Outlook.com's `[data-ogsc]` / `[data-ogsb]`, and — **in the preview only** — behind
+`[data-eb-dark]`.
+
+### The preview
+
+The preview iframe is already the real exported HTML, and it is sandboxed without
+`allow-same-origin` or `allow-scripts`, so nothing can reach into it after the fact. The dark
+preview therefore bakes `data-eb-dark="1"` onto `<html>` at render time and ships the same
+rules a third time behind that attribute. One renderer, one stylesheet.
+
+The canvas is **not** an iframe — it sanitises block HTML into divs, and DOMPurify strips
+`<style>` — so the Light/Dark toggle drives the Preview window, and says so in its tooltip.
+The dark preview carries the note that Gmail's apps invert colours themselves and ignore
+these rules, while Apple Mail, Outlook (Mac/iOS) and Outlook.com follow them.
+
+### The brand dark palette
+
+Eight fields: `page_bg`, `content_bg`, `text`, `muted`, `link`, `border`, `button_bg`,
+`button_text`. Null on every brand saved before 3B and on any brand nobody has filled in, and
+derived in that case: a `#121212` page, a `#1E1E1E` content panel (pure black makes text
+ring), `#E5E7EB` text, the brand link lightened until it clears 4.5:1 on the content
+background, and the brand primary as the button with whichever of black or white reads on it.
+A half-filled palette falls back key by key, so one blank field cannot produce an invisible
+email.
+
+The Brands page gets a **Dark mode** section with the eight fields, a **Derive from light**
+button, a **Reset to derived**, a live sample painted with the palette itself, and a readout
+of the measured text and link ratios.
+
+### Checks
+
+The 3A engine runs its contrast rules a second time over the dark design, as
+`CONTRAST_TEXT_DARK` / `CONTRAST_BUTTON_DARK` / `CONTRAST_LINK_DARK` errors with the same
+stable-id scheme, so a dark issue can be ignored and stay ignored. Plus `DARK_NO_LOGO` (info,
+only when the email actually uses a logo), `DARK_IMAGE_MANUAL` (info, a hero background image
+dark mode cannot restyle) and `SIZE_DARK_OVERHEAD` (warning above 3 KB, measured by rendering
+both ways rather than estimated).
+
+### Known gaps
+
+- **Gmail's apps ignore all of this.** They apply their own inversion. Nothing in this feature
+  changes that; the note in the preview is the honest answer.
+- **The canvas stays light.** It is not an iframe, so it cannot host the stylesheet.
+- **The role mapping is heuristic.** `secondary`/`accent`/`primary` are mapped by the role the
+  presets use them for, with the two corrections above. A brand that uses one of them a third
+  way wants an explicit per-block dark override — and the dark contrast check will say so.
+- **Dark overrides are two fields per block** (background and text), driving a fixed list of
+  colour fields per block type. A block with several text colours moves them together.
+- **Background images and text over images** cannot be restyled; `DARK_IMAGE_MANUAL` flags it.
+
+### Tests
+
+`src/test/dark.test.ts` (89) plus a `dark mode` block in `src/test/app.test.tsx` (4).
+Suite: **639 passing** (was 546), `tsc --noEmit` clean.
+
+Covered: the per-preset byte-identity snapshot with dark off, and that it is the flag rather
+than the caller that decides; both meta tags, the media query and both Outlook.com selectors
+with it on; no `brand.`, no flex/grid/`position:`; every dark rule carrying `!important`;
+every minted class having a rule and every rule being used; the preview-only selector never
+shipping; the logo pair appearing only with `logo_dark_url` and never with dark off; the
+derived palette clearing 4.5:1 for text and link across five brand link colours and the button
+label clearing 3:1 across four primaries; key-by-key fallback; a hand-typed hex staying put
+while a brand colour moves, and a per-block or per-row override beating both; the
+surface-as-label correction; dark contrast errors with stable ids that survive an unrelated
+edit and vanish when the toggle goes off; `DARK_NO_LOGO` appearing and then not; the 3 KB
+overhead threshold; every preset free of dark contrast errors on the Vee brand; and a pre-3B
+brand and email loading unchanged.
+
+Verified in a real browser: the Newsletter preset on the Vee brand previewing with a `#121212`
+page, a `#1E1E1E` content panel, light heading text, the orange CTA with a readable dark
+label and orange links; switching back to Light giving byte-for-byte the same 19,657-character
+document as before; the export carrying both meta tags and `[data-ogsc]` with dark on and
+**none** of it with dark off (17,626 characters, no `dm-` anywhere); and a brand with a light
+logo and no dark one raising `DARK_NO_LOGO` in the drawer with its hint.
+
+## Feature 5A — AI image generation (bring-your-own key) — done (2026-11-02)
+
+### The gate, checked before anything was written
+
+The brief said to verify browser-callability and stop rather than build a proxy. An
+unauthenticated CORS preflight against the real endpoint settled it:
+
+```
+OPTIONS https://api.openai.com/v1/images/generations
+access-control-allow-origin: *
+access-control-allow-methods: DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT
+access-control-allow-headers: authorization,content-type
+```
+
+`GET /v1/models` answers the same way, which is what makes a free **Test connection**
+possible without generating a billable image. Two consequences the adapter is built around:
+the allow-list is *exactly* `authorization,content-type`, so an `OpenAI-Organization` or any
+telemetry header would fail the preflight and none is sent; and the GPT image models always
+return base64 (`data[].b64_json`), so there is no second cross-origin fetch of a returned URL.
+
+**`gpt-image-1` no longer exists.** The current spec-generated SDK enumerates
+`gpt-image-1-mini`, `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2.5-sunburst`,
+`gpt-image-2.5-flare` and `chatgpt-image-latest`. The dropdown ships that list and defaults to
+`gpt-image-1-mini`, the cheapest, because the panel invites regeneration on someone's own card.
+
+### Where the key lives, and where it provably does not
+
+Module memory by default; it dies with the tab. **Remember on this device** is opt-in and
+writes `email-builder:aikey:v1` through 2B's `writeSafe()` — one key, so there is one place to
+look and one thing for **Remove key** to clear. Unticking the box deletes the stored copy
+rather than leaving it behind.
+
+The key is deliberately **not in the zustand store**. Everything in that store is a candidate
+for serialisation — designs, brands, saved blocks, version snapshots all round-trip through
+JSON — so a key that is never in the store cannot be written out by a future feature that
+forgets this rule exists. A test sweeps every surface (design, brands, saved blocks, image
+library, issues, rendered export, every localStorage entry, and `document.body.textContent`)
+after a full generate-and-use run.
+
+Provider error bodies are read for classification only. A provider is free to echo the request
+back in an error, so nothing from the body reaches a message — there is a test that feeds back
+`key sk-… is invalid` and asserts neither `message` nor `detail` contains it.
+
+### The response is untrusted input
+
+`validate.ts` is the only path bytes may take in: PNG, JPEG or WebP by **magic bytes**, never
+by the declared content-type, under 10 MB, and SVG refused outright — it is a document that
+can carry script, not an image. HTML served with a 200 and JSON where an image was promised
+are both rejected with a reason.
+
+### Drafts, and the three rules that follow
+
+There is no image hosting, so `ImageHosting` is declared and `configured: false`. A generated
+image therefore becomes a **local draft**: bytes in IndexedDB, and the design carries only
+`aiDraftId`.
+
+- the design, saved blocks and every JSON export carry the **id only**
+- at the export boundary the id is swapped for `https://placehold.co/600x400?…`, which the 3A
+  engine already recognises, so the existing placeholder warning fires on its own
+- a draft is local to one browser, so **a missing one is a normal state** — an imported design
+  or a saved block from another machine arrives exactly that way
+
+That last point is `AI_IMAGE_MISSING_DRAFT` (error, quick action **Replace image**) beside
+`AI_IMAGE_NOT_HOSTED` (error, quick action **Replace with hosted URL**). Following 2C-1's rule
+that an unexamined thing is never accused, the engine only reports *missing* once
+`refreshDrafts()` has actually read the store. The canvas shows an **AI draft (not hosted)**
+badge, or **Draft image missing**, instead of a broken image.
+
+Typing a real URL into the field clears `aiDraftId`, which is also what the quick action drives.
+
+### Two defects found while building
+
+- **The throttle had a hole.** `setBusy(true)` ran *after* the 2-second gap sleep, so between
+  the click and the request the Regenerate button stayed enabled and a second generation could
+  be queued — breaking "one generation at a time". Busy now goes up first, and `send()` guards
+  on it as well as the button's disabled state.
+- **A test of mine was pathological**, not the code: building a 10 MB base64 payload one
+  `String.fromCharCode` at a time took 5.5 s and tripped the timeout. It allocates directly now.
+
+### Scope
+
+Entry points are the five fields the decision named: Image block, Hero image, Hero cards,
+Article list items, Header logo. They go through the shared `ImageFields` component, so a 4A
+block picks the button up by passing one prop. The Footer logo shares that component and is
+deliberately **not** passed the prop, per "only the image fields that exist now".
+
+### Known gaps
+
+- **No hosting adapter**, so every generated image is a draft and every export of one ships a
+  placeholder. That is the designed end state of 5A, not an omission.
+- **Drafts do not sync.** They are per browser by construction. Sharing a design means hosting
+  the image first.
+- **16:9 and 4:3 have no documented size**, so they are requested as custom `WIDTHxHEIGHT` with
+  a single retry at the nearest documented size if the model refuses. 1:1 and 3:2 map exactly.
+- **The natural size is read from PNG headers only**; JPEG and WebP report 0 and the resolution
+  note stays quiet rather than guessing.
+- **Exposing an API key to a browser is a real trade-off**, which is why the key is
+  session-only by default and the Remember checkbox carries an explicit warning.
+
+### Tests
+
+`src/test/ai.test.ts` (39) and `src/test/ai-ui.test.tsx` (16). Suite: **694 passing**
+(was 639), `tsc --noEmit` clean. No test makes a real API call — `fetch` is stubbed and the
+real adapter runs against it, so the request shape is covered rather than mocked away.
+
+Covered: magic-byte acceptance and the SVG/HTML/JSON/oversize/empty refusals; base64 decode
+and PNG header parsing; the key in memory vs one storage key, unticking Remember, Remove key,
+masking; exactly two headers and never the key in a URL or body; the size map per aspect
+including the custom-size fallback; every error status mapped to its kind; cancel at both the
+provider and the UI; a free key test; the composer gated until saved **and** tested; all four
+result actions, session history, Edit prompt; alt required before use; the brand toggle sending
+only palette hex and never the logo or footer; an id in the design and never bytes; the export
+free of `data:` and `blob:`; `AI_IMAGE_NOT_HOSTED`, `AI_IMAGE_MISSING_DRAFT` on both a design
+import and a saved-block insert, stable ids, and the never-accuse-before-looking rule.
+
+## Feature 5A — amendment: AI settings and per-provider keys — done (2026-11-03)
+
+### The bug
+
+`AiImagePanel` chose between setup and chat with one expression — `!configured || !tested`
+— and both flags were seeded **once** from `loadKey()` on mount. A saved key therefore put
+the panel straight into chat with no route back, and the only **Remove key** button lived
+inside the setup view it could no longer reach. Once configured, the key was unchangeable
+short of clearing site data.
+
+### What changed
+
+**Settings are now a view, not a state.** `view: 'chat' | 'settings'` is independent of
+whether a key exists, and a ⚙ in the panel header toggles it from either side. Returning to
+chat keeps `turns`, because the session has always lived in panel state. Configuring the
+*active* provider still lands on the chat, which is the first-run path; configuring any other
+leaves you in settings, where you were.
+
+**One key per provider.** `key-store.ts` moves from a single global slot to
+`email-builder:aikeys:v2`, holding `{ activeProviderId, byProvider: { [id]: { model, key } } }`
+— still one storage key, so there remains exactly one place a secret can be and one thing a
+wipe has to clear. Remember-on-device is per provider: remembering OpenAI does not quietly
+remember another. A v1 record migrates into its provider's slot on first read and the old key
+is deleted, so an existing configuration keeps working.
+
+**Status and actions per provider.** `Not configured` / `Configured` / `Connected`, where
+*Connected* comes only from a passing Test connection **this session** — a remembered key is
+`Configured` until proven, rather than trusted because it is on disk. Each provider offers
+Add/Replace key, Test connection, Set as active and Remove key.
+
+**A replacement must prove itself.** The draft key lives in component state and
+`saveKey()` is only called after `testKey()` resolves. A failed replacement leaves the stored
+key untouched and nothing is written — there is a test that asserts the rejected key never
+reaches localStorage.
+
+**Switching or removing cancels, but does not forget.** Both abort any in-flight generation
+through the existing `AbortController`, keep the session messages, and gate the composer on
+the active provider being Connected. Removing the active provider's key falls back to the
+first other Connected provider, else leaves none active and the composer disabled with a
+message saying why. The chat header always reads `Provider: <name> / <model>`.
+
+### A real bug the tests caught
+
+The first version set the active provider **only through the persisted record**. A key saved
+without *Remember on this device* persists nothing, so `activeProvider()` returned null, the
+composer never unlocked, and every UI test timed out. The active pointer is now set in memory
+as well as on disk, so a session-only key works exactly like a remembered one.
+
+### Not done
+
+The brief's item 3 — a second real provider — is **not built**. `<NEW PROVIDER>` arrived as an
+unfilled placeholder, and the adapter cannot be written without the real model names, auth
+header and request shape, nor can the browser CORS check that decides whether it is possible
+at all. The multi-provider behaviour is nonetheless proven: `ai-providers.test.tsx` mocks the
+registry with two fake adapters built on the unchanged `ImageProvider` interface. Adding a
+real one remains one file plus one registry entry.
+
+### Tests
+
+`src/test/ai-providers.test.tsx` (8, new) plus rewrites of the key-store block in
+`ai.test.ts` and the setup flow in `ai-ui.test.tsx`. Suite: **710 passing** (was 694),
+`tsc --noEmit` clean. No real API calls.
+
+Covered: settings reachable from the chat once configured; the provider list with per-provider
+status; two keys side by side with independent remember flags; removing one leaving the other;
+the active pointer surviving a reload and clearing when its provider is removed; v1 migration;
+a failed replacement keeping the old key and storing nothing; removing the active key disabling
+the composer; switching the active provider cancelling an in-flight generation while keeping
+the messages; and a sweep proving **two** providers' keys appear in no design, brand, saved
+block, library record, issue, export, error string, DOM text, or any storage key but the one.
+
+## Feature 5A — amendment: OpenAI error mapping — done (2026-11-03)
+
+Errors were classified by HTTP status alone, so every 401 and 403 collapsed into one
+"That API key was rejected" — which is wrong advice for a 403 about an unverified
+organization, and actively misleading for a 429 that means "no credit" rather than
+"slow down". Mapping is now by status **and** `error.code`:
+
+| Response | Result |
+|---|---|
+| 401 (any code) | `invalid-key` — "OpenAI rejected the key. Check for typos or extra spaces, or create a new key." |
+| 403 | `forbidden` — OpenAI's own `error.message`, with the hint "This key or organization may not be allowed to use this image model." |
+| 429 `insufficient_quota` | `no-credit` — "No API credits. Add billing credit in your OpenAI account." |
+| 429 otherwise | `rate-limit` — unchanged |
+| `content_policy*` at any 4xx | `content-policy` — unchanged |
+| 5xx | `network` |
+| anything else | `bad-response` — "OpenAI error (404): The model does not exist" |
+
+`AiError` gained an optional message override and the two new kinds; the panel now renders
+`detail` as a second line, which is how the 403 hint reaches the screen.
+
+### Showing a provider's words without showing a secret
+
+Two of those cases surface OpenAI's own `error.message`, which reverses a deliberate earlier
+decision never to show provider body text — there was a passing test proving an echoed key
+could not reach the user. Rather than drop that guarantee, provider text now goes through
+`redactKeys(message, key)` before it is shown: the exact key just sent is replaced, and so is
+anything else key-shaped (`sk-`/`rk-`/`org-`/`proj-` prefixes, and any `Bearer <token>`). The
+leak test was widened to cover all six statuses rather than removed.
+
+Keys are also normalised with `normalizeKey()` — every whitespace character stripped, not just
+the ends — before saving and before every request. A pasted key with a trailing newline used
+to fail with no useful explanation; an internal newline would have survived `.trim()`.
+
+### A dead regex, caught by its own test
+
+The first version of `redactKeys` had `\b` written into the file as a literal **backspace
+byte** (0x08) rather than a word boundary, courtesy of shell escaping. The generic pass
+therefore matched nothing and was silently dead — only the exact-key replacement worked. The
+redaction test caught it. `src/` was then swept for other stray control bytes; there are none.
+
+A second regression was caught the same way: narrowing the content-policy match from
+`content_policy` to `content_policy_violation` dropped a case the previous code handled, and
+an existing UI test failed on it. The looser match is restored.
+
+### Tests
+
+Suite: **715 passing** (was 710), `tsc --noEmit` clean. Nine new cases in `ai.test.ts`: one
+per mapping, 403 with an empty message, the same classification from `testKey`, the widened
+key-leak sweep across all six statuses, redaction of a key-shaped string that is *not* the one
+sent, and an echoed `Authorization: Bearer` header.
+
+## Feature 5A — amendment: draft rendering, composer keys, style presets — done (2026-11-03)
+
+### 1. The draft image never rendered
+
+**Root cause, one line:** `safeUrl()` (`src/lib/util.ts`) permits `http(s)`, `mailto:`,
+`tel:`, `//`, merge tags and `data:image/...;base64,` — and returns `''` for every other
+scheme. The canvas was handing it a `blob:` object URL, so `renderBlockInner` took its
+`if (!src) return placeholder(...)` branch and drew "Image — select this block and add an
+image" next to a badge claiming a draft was there.
+
+What was *not* wrong, checked before changing anything: the `aiDraftId` is written to the
+block correctly, and the blob is read back out of IndexedDB correctly. The canvas is also not
+an iframe, so no sandbox was involved there.
+
+Two further layers would have blocked `blob:` even with `safeUrl` widened, which is why the
+fix is `data:` rather than admitting `blob:`:
+
+- DOMPurify's `IS_ALLOWED_URI` has no `blob:`, so it strips the attribute (`purify.cjs.js:956`).
+- The Preview iframe is sandboxed **without** `allow-same-origin`, so a parent-origin `blob:`
+  can never load inside it at all.
+
+Both layers already accept `data:` unchanged — `safeUrl` whitelists it, and DOMPurify allows
+`data:` on an `img src` because `img` is in its default `DATA_URI_TAGS` (`purify.cjs.js:2165`).
+Two tests now pin exactly this, so the next person does not have to rediscover it.
+
+**The fix.** `draftDataUrl(id)` in `src/lib/drafts.ts` converts a draft once and caches it by
+id; `useDraftImages` (`src/components/useDraftImages.ts`) is the single loader shared by the
+canvas and the preview. `OutputOpts.draftImages` carries the result into `substituteDraft()`,
+which writes the bytes when a map is supplied and `AI_DRAFT_PLACEHOLDER_URL` when it is not.
+**Only the canvas and the preview ever supply one**, so an exported document cannot carry
+image bytes by construction rather than by anyone remembering the rule. Removing a draft
+evicts its cached copy.
+
+All five holders — Image, Hero image, Hero card, Article item, Header logo — failed for that
+one reason and are fixed by that one change; each has its own test.
+
+The Preview caption now reads *"…except AI drafts, shown here locally. The export ships a
+placeholder until you host them."* and only when the design actually holds one, because
+showing the draft there would otherwise make the old caption a lie.
+
+*Cost accepted:* a 1024px PNG is ~1–2 MB, so its base64 is ~1.4–2.7 MB held per draft. One
+conversion per id, one splice per change.
+
+### 2. Composer keys
+
+Enter sends, Shift+Enter inserts a newline, and `event.isComposing` returns early so the
+keystroke that commits an IME candidate is never a send. `send()` returns whether it
+dispatched, and the composer is cleared only then — a blocked validation leaves the text
+alone. The 2 s floor, the one-in-flight guard, **Edit prompt** and **Regenerate** are
+unchanged.
+
+### 3. Style presets, model and quality
+
+`src/lib/ai/styles.ts` holds None / Cinematic elegant (default) / Corporate clean / Minimal.
+The suffix is appended at send time only, so the composer keeps the user's own words and
+round-trips through Edit prompt; the result card names the style. Order is
+`prompt + style + brand`, so **Brand colours** still stacks on top.
+
+**Checked against the current OpenAI spec rather than assumed:** `gpt-image-2` is already a
+listed model id, so it simply becomes the first entry and therefore the default;
+`quality` is documented as supporting `low`/`medium`/`high` across the GPT image models, which
+is exactly the selector offered (low labelled **Draft**, default **high**); there is no
+gpt-image-2-specific parameter, and `size` / `output_format` are unchanged. `quality` is
+omitted from the body entirely when unset.
+
+*Note:* `gpt-image-2` costs more per image than the previous `gpt-image-1-mini` default. Draft
+quality is the cheap path for iterating.
+
+### Two test assertions that were wrong
+
+- `expect(prompt).not.toContain('logo')` was a sloppy proxy for "no brand asset is sent" — the
+  Cinematic suffix legitimately contains "no logos". It now asserts no URL and no brand name.
+- A cancel test asserted the Generate button was enabled afterwards; clearing the composer on
+  send correctly disables it. It now asserts the composer is enabled and empty.
+
+### Tests
+
+`src/test/ai-draft-render.test.tsx` (17, new) plus composer and style blocks in
+`ai-ui.test.tsx`. Suite: **741 passing** (was 715), `tsc --noEmit` clean.
+
+Verified in a real browser with a byte-checked 16×16 red PNG seeded into IndexedDB: the image
+renders on the canvas with the AI-draft badge and no placeholder text, the Preview carries the
+bytes and the amended caption, and the same design exports at 3,957 characters with
+`placehold.co` present and **no** `data:`, `blob:` or draft id. Console clean.
+
+## Feature 5A — amendment: failure diagnostics and the gpt-image-2 request — done (2026-11-03)
+
+### "reply was not JSON" told you nothing
+
+A non-JSON or unusable reply now reports what was asked and what came back: HTTP status,
+`Content-Type`, elapsed seconds, and the model / quality / size that were sent, followed by
+the first 200 characters of the body as plain text — tags stripped, `<script>` and `<style>`
+contents dropped, whitespace collapsed, and keys redacted on the way through. The friendly
+sentence is the message; the facts are the detail line beneath it.
+
+Three cases are named rather than left generic:
+
+| Response | Message |
+|---|---|
+| 502 / 503 / 504 / 524 | "OpenAI gateway timed out. The image may still have been generated and billed; check your OpenAI usage before retrying. Try medium quality or a smaller size." |
+| `Content-Type: text/html` (any status) | "A proxy or firewall returned a web page instead of the API reply." |
+| empty body | "The API returned an empty reply." |
+
+HTML is detected by content type *or* by a leading `<!doctype`/`<html>`, because a captive
+portal is perfectly capable of answering 200 with a login page.
+
+**The elapsed counter** now ticks in the loading card — "Generating… 12s" — which is the
+difference between a slow model and a hung one.
+
+### The retry had to go, and the docs said why
+
+`generate()` carried an auto-retry: a 400 re-issued the request at a fallback size. That is
+exactly the double-bill risk this amendment forbids, and checking the current spec showed it
+was papering over a real bug rather than being defensive.
+
+**What the spec says:** `gpt-image-2`, its dated snapshot and the 2.5 variants accept an
+arbitrary `WIDTHxHEIGHT`, *"for example 1536x864"*, with both sides divisible by 16, a ratio
+between 1:3 and 3:1, and a 3840x2160 ceiling. Other models take the documented set only.
+
+**What was wrong:** the 4:3 map emitted **`1365x1024`**, and 1365 is not divisible by 16. So
+4:3 was rejected on every model and the retry silently downgraded it to 3:2 — the feature
+appeared to work while never once producing a 4:3 image.
+
+**Fixed:** 4:3 is now `1360x1024` (the nearest multiple of 16), a custom size is sent only to
+models that document one, everything else gets the nearest documented size, and the retry is
+deleted. One request per generation, always. A test walks every model × every aspect × three
+block widths and asserts each size satisfies all three documented constraints.
+
+Also checked and found already correct: `response_format` is never sent (deprecated and
+unsupported for GPT image models), `output_compression` is never sent (valid only with
+webp/jpeg, and we ask for png), `n: 1` and `output_format: 'png'` are supported, and `quality`
+is omitted entirely when unset so the model picks its own default.
+
+### Security
+
+The diagnostic never contains the key, the `Authorization` header or any request header — only
+the status, content type, timing, the three request parameters and the body snippet. The
+snippet goes through `redactKeys()`, whose `{8,}` pattern is stricter than the `sk-[A-Za-z0-9_-]{10,}`
+asked for and also covers `rk-`/`org-`/`proj-` and any `Bearer` token. A test feeds back both
+the key in use and an unrelated `sk-` string and asserts neither survives.
+
+### Tests
+
+Suite: **751 passing** (was 741), `tsc --noEmit` clean. New: an HTML page at 200 and at each
+gateway status, an empty body, a non-JSON body truncated at exactly 200 characters, a
+well-formed JSON error, a valid image, the model/quality/size/elapsed facts in every
+diagnostic, redaction of two different keys, no-retry-on-failure, the per-model size mapping,
+the all-models size-constraint sweep, and the exact request-body key set with and without
+quality.

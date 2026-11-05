@@ -3,6 +3,7 @@ import type { Block, Brand, Design } from '../types';
 import { resolveDesign, type ResolveMode } from './brand';
 import { applySampleData, formatMergeTags } from './merge';
 import { addUtm, countHtmlLinks, rewriteHtmlLinks, wouldTag } from './utm';
+import { type DarkCtx, darkBrand, darkColors, darkCtx, prepareDarkDesign } from './dark';
 
 /**
  * The export boundary.
@@ -20,6 +21,15 @@ import { addUtm, countHtmlLinks, rewriteHtmlLinks, wouldTag } from './utm';
 export interface OutputOpts {
   /** preview only: render tags as these values instead of formatting them */
   sampleData?: Record<string, string> | null;
+  /**
+   * 5A: AI drafts as `data:` URIs, keyed by draft id.
+   *
+   * Supplied by the canvas and the preview and by nothing else, which is what
+   * keeps the export honest: with no map, a draft becomes the placeholder URL,
+   * so an exported document cannot carry image bytes by construction rather
+   * than by anyone remembering not to.
+   */
+  draftImages?: Record<string, string>;
 }
 
 export interface UtmStats {
@@ -66,6 +76,44 @@ const LINK_FIELDS: { url: string; flag: string }[] = [
 /** Nested arrays that hold their own links and text. */
 const ITEM_ARRAYS = ['items', 'navLinks', 'cards', 'socialItems'];
 
+/**
+ * 5A: the URL field an `aiDraftId` stands in for, by the order they appear on
+ * the five holders that can carry one (Image, Hero, Hero card, Article item,
+ * Header logo).
+ */
+const AI_URL_FIELDS = ['src', 'imageSrc', 'logoSrc'] as const;
+
+/**
+ * What an unhosted generated image exports as.
+ *
+ * A draft lives in one browser's IndexedDB, so it cannot ship. Rather than
+ * emit nothing — or, far worse, a `data:` URI — the export substitutes a
+ * placeholder on a host the 3A engine already recognises, so the existing
+ * "placeholder images still in use" warning fires on its own.
+ */
+export const AI_DRAFT_PLACEHOLDER_URL = 'https://placehold.co/600x400?text=AI+image+not+hosted';
+
+/**
+ * Swap a draft reference for something renderable: the real bytes when the
+ * caller supplied them, the placeholder otherwise. The id itself is left in
+ * place so the checks engine can still tell this block apart from a block that
+ * genuinely holds a placeholder URL.
+ */
+function substituteDraft(
+  holder: Record<string, unknown>,
+  draftImages?: Record<string, string>,
+): void {
+  const id = holder.aiDraftId;
+  if (typeof id !== 'string' || !id.trim()) return;
+  const replacement = draftImages?.[id] || AI_DRAFT_PLACEHOLDER_URL;
+  for (const field of AI_URL_FIELDS) {
+    if (typeof holder[field] === 'string') {
+      holder[field] = replacement;
+      return;
+    }
+  }
+}
+
 export function resolveForOutput(
   design: Design,
   brand: Brand,
@@ -97,6 +145,10 @@ export function resolveForOutput(
 
   const next = produce(branded, (draft) => {
     const visit = (holder: Record<string, unknown>) => {
+      // an unhosted AI draft never leaves this browser as bytes: without a
+      // draftImages map this writes the placeholder, and only the canvas and
+      // the preview ever pass one
+      if (mode === 'export' || opts.draftImages) substituteDraft(holder, opts.draftImages);
       // links first, while tags are still canonical
       if (taggingOn) {
         for (const { url, flag } of LINK_FIELDS) {
@@ -169,4 +221,33 @@ export function resolvedDesign(
   opts: OutputOpts = {},
 ): Design {
   return resolveForOutput(design, brand, mode, opts).design;
+}
+
+/* ----------------------------------------------------------- dark mode (3B) */
+
+/**
+ * The same design resolved against the brand's dark palette.
+ *
+ * This is the whole of the dark decision: it composes the existing boundary
+ * with a brand whose colour tokens have been swapped, so a token-derived colour
+ * moves and a hand-typed hex does not. The renderer compares the two passes and
+ * only emits a class where they disagree.
+ */
+export function darkResolved(design: Design, brand: Brand): Design {
+  const dark = resolveForOutput(design, darkBrand(brand), 'export').design;
+  const lit = resolveForOutput(design, brand, 'export').design;
+  return prepareDarkDesign(structuredClone(dark), lit, brand);
+}
+
+/**
+ * What to hand `renderDesign()`. Empty when dark support is off, which is what
+ * keeps that export byte-identical to a pre-3B one.
+ */
+export function darkRenderOpts(
+  design: Design,
+  brand: Brand,
+  preview = false,
+): { dark?: DarkCtx } {
+  if (!design.body.darkMode) return {};
+  return { dark: darkCtx(darkResolved(design, brand), darkColors(brand), preview) };
 }

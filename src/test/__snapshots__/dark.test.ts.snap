@@ -1,0 +1,57 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dark mode off leaves the export untouched > Cold outreach is byte-identical 1`] = `
+{
+  "chars": 8068,
+  "fnv1a": "f72b06f5",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Event invitation is byte-identical 1`] = `
+{
+  "chars": 17734,
+  "fnv1a": "756253bb",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Newsletter is byte-identical 1`] = `
+{
+  "chars": 17626,
+  "fnv1a": "6273b033",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Order confirmation is byte-identical 1`] = `
+{
+  "chars": 16566,
+  "fnv1a": "a6f5b9e9",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Product launch is byte-identical 1`] = `
+{
+  "chars": 15134,
+  "fnv1a": "1754de87",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Promotional is byte-identical 1`] = `
+{
+  "chars": 14325,
+  "fnv1a": "9378c609",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Weekly digest is byte-identical 1`] = `
+{
+  "chars": 15496,
+  "fnv1a": "22880dc4",
+}
+`;
+
+exports[`dark mode off leaves the export untouched > Welcome is byte-identical 1`] = `
+{
+  "chars": 16387,
+  "fnv1a": "7d66c8d6",
+}
+`;

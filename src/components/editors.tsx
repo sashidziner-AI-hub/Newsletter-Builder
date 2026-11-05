@@ -83,7 +83,7 @@ export function HeadingEditor({ block, set }: EditorProps<'heading', HeadingValu
       <Section title="Style">
         <NumberField label="Font size" unit="px" min={10} max={72} value={v.fontSize} onChange={(fontSize) => set({ fontSize })} />
         <Segmented label="Weight" value={v.fontWeight} onChange={(fontWeight) => set({ fontWeight })} options={boldOptions} />
-        <ColorField label="Color" value={v.color} onChange={(color) => set({ color })} />
+        <ColorField label="Color" value={v.color} onChange={(color) => set({ color })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
         <NumberField label="Line height" unit="%" min={80} max={250} value={v.lineHeight} onChange={(lineHeight) => set({ lineHeight })} />
         <SelectField label="Font" value={v.fontFamily} onChange={(fontFamily) => set({ fontFamily })} options={fontOptions(true)} />
         <AlignField value={v.align} onChange={(align) => set({ align })} />
@@ -106,7 +106,7 @@ export function TextEditor({ block, set, revision }: EditorProps<'text', TextVal
       </Section>
       <Section title="Style">
         <NumberField label="Font size" unit="px" min={10} max={40} value={v.fontSize} onChange={(fontSize) => set({ fontSize })} />
-        <ColorField label="Text color" value={v.color} allowEmpty emptyLabel="same as email" onChange={(color) => set({ color })} />
+        <ColorField label="Text color" value={v.color} allowEmpty emptyLabel="same as email" onChange={(color) => set({ color })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
         <NumberField label="Line height" unit="%" min={100} max={250} value={v.lineHeight} onChange={(lineHeight) => set({ lineHeight })} />
         <SelectField label="Font" value={v.fontFamily} onChange={(fontFamily) => set({ fontFamily })} options={fontOptions(true)} />
         <AlignField value={v.align} onChange={(align) => set({ align })} />
@@ -171,9 +171,13 @@ export function ImageEditor({ block, set }: EditorProps<'image', ImageValues>) {
         <ImageUrlField
           label="Image URL"
           value={isData ? '' : v.src}
-          onChange={(src) => set({ src })}
+          // typing a real URL retires the draft, which is also what the
+          // "Replace image" quick action in Checks drives
+          onChange={(src) => set({ src, aiDraftId: undefined })}
           onPickAlt={(alt) => set({ alt })}
           displayWidth={Math.round((600 * v.width) / 100)}
+          altSeed={v.alt}
+          onGenerated={({ draftId, alt }) => set({ src: '', alt, aiDraftId: draftId })}
           hint={
             isData
               ? 'This block still holds an embedded image, which Gmail and many inboxes strip. Paste a hosted https URL to replace it.'
@@ -240,8 +244,8 @@ export function ButtonEditor({ block, set }: EditorProps<'button', ButtonValues>
         </button>
       </Section>
       <Section title="Colors">
-        <ColorField label="Background" value={v.bgColor} onChange={(bgColor) => set({ bgColor })} />
-        <ColorField label="Text color" value={v.color} onChange={(color) => set({ color })} />
+        <ColorField label="Background" value={v.bgColor} onChange={(bgColor) => set({ bgColor })} darkValue={v.dark?.bgColor} onDarkChange={(c) => set({ dark: { ...v.dark, bgColor: c } })} />
+        <ColorField label="Text color" value={v.color} onChange={(color) => set({ color })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
       </Section>
       <Section title="Style">
         <NumberField label="Font size" unit="px" min={10} max={36} value={v.fontSize} onChange={(fontSize) => set({ fontSize })} />
@@ -605,6 +609,8 @@ export function RowEditor({
           allowEmpty
           emptyLabel="same as email"
           onChange={(contentBgColor) => onChange({ contentBgColor })}
+          darkValue={row.dark?.bgColor}
+          onDarkChange={(c) => onChange({ dark: { ...row.dark, bgColor: c } })}
         />
       </Section>
       <Section title="Layout">
@@ -719,6 +725,7 @@ function ImageFields({
   onSrc,
   onAlt,
   displayWidth,
+  onGenerated,
 }: {
   label?: string;
   src: string;
@@ -727,6 +734,12 @@ function ImageFields({
   onAlt: (v: string) => void;
   /** rendered width in px, for the resolution note */
   displayWidth?: number;
+  /**
+   * 5A: supplied by the fields in scope. Absent means no "Generate with AI"
+   * button, which is how the Footer logo and the fields without alt stay as
+   * they were. A 4A block using this component only has to pass it.
+   */
+  onGenerated?: (result: { draftId: string; alt: string }) => void;
 }) {
   const missing = !alt.trim();
   return (
@@ -737,6 +750,8 @@ function ImageFields({
         onChange={onSrc}
         onPickAlt={onAlt}
         displayWidth={displayWidth}
+        onGenerated={onGenerated}
+        altSeed={alt}
       />
       <div>
         <span className="mb-1 block text-xs font-medium text-slate-600">
@@ -820,15 +835,27 @@ function FullWidthBg({
   fullWidthBg,
   setBg,
   setFullWidth,
+  darkBg,
+  setDarkBg,
 }: {
   bgColor: string;
   fullWidthBg: boolean;
   setBg: (v: string) => void;
   setFullWidth: (v: boolean) => void;
+  darkBg?: string;
+  setDarkBg?: (v: string) => void;
 }) {
   return (
     <>
-      <ColorField label="Background color" value={bgColor} allowEmpty emptyLabel="transparent" onChange={setBg} />
+      <ColorField
+        label="Background color"
+        value={bgColor}
+        allowEmpty
+        emptyLabel="transparent"
+        onChange={setBg}
+        darkValue={darkBg}
+        onDarkChange={setDarkBg}
+      />
       <ToggleField label="Extend background full width" value={fullWidthBg} onChange={setFullWidth} />
       <p className="text-[11px] leading-snug text-slate-400">
         A block stops at the content width. This also paints the row behind it, which is the only
@@ -879,8 +906,11 @@ export function HeaderEditor({
             label="Logo"
             src={v.logoSrc}
             alt={v.logoAlt}
-            onSrc={(logoSrc) => set({ logoSrc })}
+            onSrc={(logoSrc) => set({ logoSrc, aiDraftId: undefined })}
             onAlt={(logoAlt) => set({ logoAlt })}
+            onGenerated={({ draftId, alt }) =>
+              set({ logoSrc: '', logoAlt: alt, aiDraftId: draftId })
+            }
           />
         )}
         <NumberField label="Logo width" unit="px" min={40} max={400} value={v.logoWidth} onChange={(logoWidth) => set({ logoWidth })} />
@@ -956,6 +986,8 @@ export function HeaderEditor({
           bgColor={v.bgColor}
           fullWidthBg={v.fullWidthBg}
           setBg={setBg}
+          darkBg={v.dark?.bgColor}
+          setDarkBg={(c) => set({ dark: { ...v.dark, bgColor: c } })}
           setFullWidth={(fullWidthBg) => {
             set({ fullWidthBg });
             onRowPatch?.({ bgColor: fullWidthBg ? v.bgColor : '' });
@@ -1026,8 +1058,11 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
           <ImageFields
             src={v.imageSrc}
             alt={v.imageAlt}
-            onSrc={(imageSrc) => set({ imageSrc })}
+            onSrc={(imageSrc) => set({ imageSrc, aiDraftId: undefined })}
             onAlt={(imageAlt) => set({ imageAlt })}
+            onGenerated={({ draftId, alt }) =>
+              set({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+            }
           />
         </Section>
       )}
@@ -1060,8 +1095,11 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
                   label="Card image"
                   src={item.imageSrc}
                   alt={item.imageAlt}
-                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onSrc={(imageSrc) => patch({ imageSrc, aiDraftId: undefined })}
                   onAlt={(imageAlt) => patch({ imageAlt })}
+                  onGenerated={({ draftId, alt }) =>
+                    patch({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+                  }
                 />
                 <input
                   aria-label="Card link label"
@@ -1128,7 +1166,7 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
         <NumberField label="Heading size" unit="px" min={16} max={56} value={v.headingFontSize} onChange={(headingFontSize) => set({ headingFontSize })} />
         <Segmented label="Heading weight" value={v.headingFontWeight} onChange={(headingFontWeight) => set({ headingFontWeight })} options={boldOptions} />
         <SelectField label="Heading font" value={v.headingFontFamily} onChange={(headingFontFamily) => set({ headingFontFamily })} options={fontOptions(true)} />
-        <ColorField label="Heading color" value={v.headingColor} onChange={(headingColor) => set({ headingColor })} />
+        <ColorField label="Heading color" value={v.headingColor} onChange={(headingColor) => set({ headingColor })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
         <ColorField label="Eyebrow color" value={v.eyebrowColor} onChange={(eyebrowColor) => set({ eyebrowColor })} />
         <NumberField label="Subtext size" unit="px" min={11} max={24} value={v.subtextFontSize} onChange={(subtextFontSize) => set({ subtextFontSize })} />
         <ColorField label="Subtext color" value={v.subtextColor} onChange={(subtextColor) => set({ subtextColor })} />
@@ -1136,7 +1174,15 @@ export function HeroEditor({ block, set }: EditorProps<'hero', HeroValues>) {
       </Section>
 
       <Section title="Background">
-        <ColorField label="Background color" value={v.bgColor} allowEmpty emptyLabel="transparent" onChange={(bgColor) => set({ bgColor })} />
+        <ColorField
+          label="Background color"
+          value={v.bgColor}
+          allowEmpty
+          emptyLabel="transparent"
+          onChange={(bgColor) => set({ bgColor })}
+          darkValue={v.dark?.bgColor}
+          onDarkChange={(c) => set({ dark: { ...v.dark, bgColor: c } })}
+        />
         {v.layout === 'centered' && (
           <ImageUrlField
             label="Background image URL"
@@ -1213,8 +1259,11 @@ export function ArticleListEditor({ block, set }: EditorProps<'articles', Articl
                   label="Thumbnail"
                   src={item.imageSrc}
                   alt={item.imageAlt}
-                  onSrc={(imageSrc) => patch({ imageSrc })}
+                  onSrc={(imageSrc) => patch({ imageSrc, aiDraftId: undefined })}
                   onAlt={(imageAlt) => patch({ imageAlt })}
+                  onGenerated={({ draftId, alt }) =>
+                    patch({ imageSrc: '', imageAlt: alt, aiDraftId: draftId })
+                  }
                 />
               )}
               <input
@@ -1254,11 +1303,19 @@ export function ArticleListEditor({ block, set }: EditorProps<'articles', Articl
         <NumberField label="Title size" unit="px" min={12} max={32} value={v.titleFontSize} onChange={(titleFontSize) => set({ titleFontSize })} />
         <Segmented label="Title weight" value={v.titleFontWeight} onChange={(titleFontWeight) => set({ titleFontWeight })} options={boldOptions} />
         <SelectField label="Title font" value={v.titleFontFamily} onChange={(titleFontFamily) => set({ titleFontFamily })} options={fontOptions(true)} />
-        <ColorField label="Title color" value={v.titleColor} onChange={(titleColor) => set({ titleColor })} />
+        <ColorField label="Title color" value={v.titleColor} onChange={(titleColor) => set({ titleColor })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
         <NumberField label="Excerpt size" unit="px" min={11} max={22} value={v.excerptFontSize} onChange={(excerptFontSize) => set({ excerptFontSize })} />
         <ColorField label="Excerpt color" value={v.excerptColor} onChange={(excerptColor) => set({ excerptColor })} />
         <ColorField label="Link color" value={v.linkColor} onChange={(linkColor) => set({ linkColor })} />
-        <ColorField label="Background color" value={v.bgColor} allowEmpty emptyLabel="transparent" onChange={(bgColor) => set({ bgColor })} />
+        <ColorField
+          label="Background color"
+          value={v.bgColor}
+          allowEmpty
+          emptyLabel="transparent"
+          onChange={(bgColor) => set({ bgColor })}
+          darkValue={v.dark?.bgColor}
+          onDarkChange={(c) => set({ dark: { ...v.dark, bgColor: c } })}
+        />
         <AlignField value={v.align} onChange={(align) => set({ align })} />
       </Section>
       <Section title="Spacing">
@@ -1420,13 +1477,15 @@ export function FooterEditor({
 
       <Section title="Style">
         <NumberField label="Text size" unit="px" min={9} max={18} value={v.fontSize} onChange={(fontSize) => set({ fontSize })} />
-        <ColorField label="Text color" value={v.textColor} onChange={(textColor) => set({ textColor })} />
+        <ColorField label="Text color" value={v.textColor} onChange={(textColor) => set({ textColor })} darkValue={v.dark?.textColor} onDarkChange={(c) => set({ dark: { ...v.dark, textColor: c } })} />
         <ColorField label="Link color" value={v.linkColor} onChange={(linkColor) => set({ linkColor })} />
         <SelectField label="Font" value={v.fontFamily} onChange={(fontFamily) => set({ fontFamily })} options={fontOptions(true)} />
         <FullWidthBg
           bgColor={v.bgColor}
           fullWidthBg={v.fullWidthBg}
           setBg={setBg}
+          darkBg={v.dark?.bgColor}
+          setDarkBg={(c) => set({ dark: { ...v.dark, bgColor: c } })}
           setFullWidth={(fullWidthBg) => {
             set({ fullWidthBg });
             onRowPatch?.({ bgColor: fullWidthBg ? v.bgColor : '' });
@@ -1598,6 +1657,20 @@ export function BodyEditor({
             </p>
           </>
         )}
+      </Section>
+
+      <Section title="Dark mode">
+        <ToggleField
+          label="Dark mode support"
+          value={body.darkMode}
+          onChange={(darkMode) => onChange({ darkMode })}
+        />
+        <p className="text-[11px] leading-snug text-slate-400">
+          Adds a stylesheet and the two colour-scheme meta tags, using the active brand's dark
+          palette. Light mode is untouched either way, and with this off the exported HTML is
+          exactly what it would have been without the feature. Gmail's apps invert colours
+          themselves and ignore these rules.
+        </p>
       </Section>
 
       <Section title="Footer">

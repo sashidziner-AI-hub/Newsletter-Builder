@@ -421,6 +421,8 @@ export function defaultBody(): BodySettings {
     // curly is the canonical form, so the default export is an identity transform
     mergeFormat: 'curly',
     mergeCustom: { prefix: '{{', suffix: '}}' },
+    // 3B: on by default, so a new email handles both schemes
+    darkMode: true,
     utm: { enabled: false, source: '', medium: 'email', campaign: '', content: '', term: '' },
   };
 }

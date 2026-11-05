@@ -1,14 +1,15 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { produce } from 'immer';
-import type { Block, BlockType, Brand, Design, Device, Row, Selection, BodySettings } from './types';
+import type { Block, BlockType, Brand, Design, Device, Row, Scheme, Selection, BodySettings } from './types';
 import type { SavedBlock } from './lib/blocks-library';
 import { instantiate, makeSavedBlock } from './lib/blocks-library';
 import { shouldSnapshot, type SnapshotReason } from './lib/versions';
-import { type Issue, checkDesign } from './lib/checks';
-import { resolveForOutput } from './lib/output';
+import { type Issue, byteLength, checkDesign } from './lib/checks';
+import { darkRenderOpts, darkResolved, resolveForOutput } from './lib/output';
 import { renderDesign } from './lib/render';
 import { imageStorage, type LibraryImage } from './lib/image-storage';
+import { draftStore } from './lib/drafts';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
@@ -48,6 +49,9 @@ interface EditorState {
   future: Design[];
   selection: Selection;
   device: Device;
+  /** 3B: which colour scheme the Preview modal shows */
+  scheme: Scheme;
+  setScheme: (s: Scheme) => void;
   lastCoalesce: { key: string; at: number } | null;
   /** bumps whenever a whole design is loaded, so editors can reset their internal state */
   revision: number;
@@ -77,6 +81,13 @@ interface EditorState {
   /** image load results probed this session, keyed by URL */
   imageStatus: Record<string, 'ok' | 'broken'>;
   checksOpen: boolean;
+  /**
+   * 5A: AI draft ids this browser holds. Empty until `refreshDrafts()` has
+   * run, and the engine treats "not looked yet" as "do not accuse".
+   */
+  knownDrafts: string[];
+  draftsChecked: boolean;
+  refreshDrafts: () => Promise<void>;
   runChecks: () => void;
   ignoreIssue: (id: string) => void;
   unignoreIssue: (id: string) => void;
@@ -195,20 +206,36 @@ export const useEditor = create<EditorState>((set, get) => {
     ignoredIssues: [],
     imageStatus: {},
     checksOpen: false,
+    knownDrafts: [],
+    draftsChecked: false,
     past: [],
     future: [],
     selection: { kind: 'body' },
     device: 'desktop',
+    scheme: 'light',
     lastCoalesce: null,
     revision: 0,
 
     select: (selection) => set({ selection }),
     setDevice: (device) => set({ device }),
+    setScheme: (scheme) => set({ scheme }),
 
     setChecksOpen: (checksOpen) => set({ checksOpen }),
 
     setImageStatus: (statuses) => {
       set({ imageStatus: { ...get().imageStatus, ...statuses } });
+      get().runChecks();
+    },
+
+    /** Which drafts exist locally, so a missing one can be told apart. */
+    refreshDrafts: async () => {
+      try {
+        const keys = await draftStore.keys();
+        set({ knownDrafts: keys, draftsChecked: true });
+      } catch {
+        // an unreadable store is "we have not looked", not "nothing is there"
+        set({ draftsChecked: false });
+      }
       get().runChecks();
     },
 
@@ -231,7 +258,29 @@ export const useEditor = create<EditorState>((set, get) => {
       }
       for (const [url, status] of Object.entries(imageStatus)) loadStatus.set(url, status);
 
-      set({ issues: checkDesign(out.design, renderDesign(out.design), brand, { loadStatus, imageWidths }) });
+      // 3B: with dark support on the engine gets the dark pass too, and the
+      // real cost of the dark machinery, measured rather than estimated
+      const opts = darkRenderOpts(design, brand);
+      const html = renderDesign(out.design, opts);
+      const dark = design.body.darkMode
+        ? {
+            darkDesign: darkResolved(design, brand),
+            darkOverheadBytes: byteLength(html) - byteLength(renderDesign(out.design)),
+          }
+        : {};
+
+      // only pass the draft set once it has actually been read
+      const { knownDrafts, draftsChecked } = get();
+      const drafts = draftsChecked ? { knownDrafts: new Set(knownDrafts) } : {};
+
+      set({
+        issues: checkDesign(out.design, html, brand, {
+          loadStatus,
+          imageWidths,
+          ...dark,
+          ...drafts,
+        }),
+      });
     },
 
     ignoreIssue: (id) => {

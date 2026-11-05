@@ -11,6 +11,18 @@ import type {
   SocialItem,
 } from '../types';
 import { createBlock, pad, SOCIAL_NETWORKS } from './defaults';
+import {
+  DARK_META,
+  DM_LOGO_DARK,
+  DM_LOGO_LIGHT,
+  DM_PREVIEW_ATTR,
+  LOGO_DARK_HIDDEN,
+  type DarkCtx,
+  type DmKind,
+  darkCss,
+  dmAttr,
+  dmClass,
+} from './dark';
 import { esc, safeUrl } from './util';
 
 export interface RenderCtx {
@@ -18,6 +30,38 @@ export interface RenderCtx {
   colWidth: number;
   /** editor mode renders friendly placeholders for empty blocks */
   editor?: boolean;
+  /**
+   * 3B: present only while rendering with dark mode on. Everything dark is
+   * additive — class names beside the inline styles, and one stylesheet — so
+   * with this absent the output is exactly what it was before 3B.
+   */
+  dark?: DarkCtx;
+  /**
+   * The dark counterpart values for the block being rendered, when it is a
+   * synthetic sub-block (a Header's nav Menu, a Footer's Social, a Hero's
+   * Button) whose id exists in no design.
+   */
+  darkValues?: Record<string, unknown>;
+}
+
+export interface RenderOpts {
+  /** the same design resolved against the brand's dark palette */
+  dark?: DarkCtx;
+}
+
+/** The dark counterpart of the block being rendered, if there is one. */
+function darkOf(block: Block, ctx: RenderCtx): Record<string, unknown> | undefined {
+  if (!ctx.dark) return undefined;
+  return ctx.darkValues ?? (ctx.dark.blocks.get(block.id)?.values as Record<string, unknown>);
+}
+
+/**
+ * The class that repaints one colour in dark mode, or `''` when it must not
+ * change — which is the answer whenever the light and dark passes agree, i.e.
+ * whenever somebody typed the hex by hand rather than taking it from the brand.
+ */
+function dmc(ctx: RenderCtx, kind: DmKind, light: string, dark: unknown): string {
+  return dmClass(ctx.dark, kind, light, typeof dark === 'string' ? dark : undefined);
 }
 
 /** Strip characters that could break out of a style attribute. */
@@ -108,10 +152,33 @@ function subBlock<T extends Block['type']>(
 }
 
 /** An email-safe <img>: width attribute, alt, border="0", display:block. */
-function imgTag(src: string, alt: string, width: number, extra = ''): string {
+function imgTag(src: string, alt: string, width: number, extra = '', cls = ''): string {
   const url = safeUrl(src);
   if (!url) return '';
-  return `<img class="eb-img" src="${esc(url)}" alt="${esc(alt)}" width="${width}" border="0" style="display:block;border:0;outline:none;text-decoration:none;width:${width}px;max-width:100%;height:auto;${extra}" />`;
+  return `<img class="eb-img${cls ? ` ${cls}` : ''}" src="${esc(url)}" alt="${esc(alt)}" width="${width}" border="0" style="display:block;border:0;outline:none;text-decoration:none;width:${width}px;max-width:100%;height:auto;${extra}" />`;
+}
+
+/**
+ * A logo that swaps in dark mode. Both images ship; the dark one is hidden by
+ * every rule a mail client understands, and the dark stylesheet reverses the
+ * pair. With no dark URL this is the single logo it always was.
+ */
+function logoPair(
+  ctx: RenderCtx,
+  src: string,
+  darkSrc: unknown,
+  alt: string,
+  width: number,
+  extra = '',
+): string {
+  const light = imgTag(src, alt, width, extra);
+  const dark = typeof darkSrc === 'string' ? safeUrl(darkSrc) : '';
+  if (!ctx.dark || !light || !dark) return light;
+  ctx.dark.logoSwap = true;
+  return (
+    imgTag(src, alt, width, extra, DM_LOGO_LIGHT) +
+    imgTag(dark, alt, width, `${extra}${LOGO_DARK_HIDDEN}`, DM_LOGO_DARK)
+  );
 }
 
 /** Wrap cells in a table row; each cell stacks on mobile via .eb-col. */
@@ -133,28 +200,28 @@ const col = (
 /** A text run with its own font/size/colour, used for every composite label. */
 function textRun(
   text: string,
-  o: { fontFamily: string; fontSize: number; color: string; weight?: string; align?: Align; lineHeight?: number; bodyFont: string; marginTop?: number },
+  o: { fontFamily: string; fontSize: number; color: string; weight?: string; align?: Align; lineHeight?: number; bodyFont: string; marginTop?: number; cls?: string },
 ): string {
   if (!text.trim()) return '';
   const mt = o.marginTop ? `padding-top:${o.marginTop}px;` : '';
-  return `<div style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;font-weight:${o.weight ?? 'normal'};line-height:${o.lineHeight ?? 140}%;color:${cssVal(o.color)};text-align:${o.align ?? 'left'};">${esc(text).replace(/\n/g, '<br />')}</div>`;
+  return `<div${dmAttr(o.cls ?? '')} style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;font-weight:${o.weight ?? 'normal'};line-height:${o.lineHeight ?? 140}%;color:${cssVal(o.color)};text-align:${o.align ?? 'left'};">${esc(text).replace(/\n/g, '<br />')}</div>`;
 }
 
 /** An inline text link, used for "Read more" and card links. */
 function linkRun(
   label: string,
   href: string,
-  o: { fontFamily: string; fontSize: number; color: string; align?: Align; bodyFont: string; marginTop?: number },
+  o: { fontFamily: string; fontSize: number; color: string; align?: Align; bodyFont: string; marginTop?: number; cls?: string },
 ): string {
   if (!label.trim()) return '';
   const url = safeUrl(href) || '#';
   const mt = o.marginTop ? `padding-top:${o.marginTop}px;` : '';
-  return `<div style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;line-height:140%;text-align:${o.align ?? 'left'};"><a href="${esc(url)}" target="_blank" style="color:${cssVal(o.color)};text-decoration:underline;">${esc(label)}</a></div>`;
+  return `<div style="${mt}font-family:${cssVal(o.fontFamily || o.bodyFont)};font-size:${o.fontSize}px;line-height:140%;text-align:${o.align ?? 'left'};"><a href="${esc(url)}" target="_blank"${dmAttr(o.cls ?? '')} style="color:${cssVal(o.color)};text-decoration:underline;">${esc(label)}</a></div>`;
 }
 
 /** A horizontal rule as a table, for dividers between article items. */
-function ruleRow(color: string, spacing: number): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:${spacing}px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-top:1px solid ${cssVal(color)};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table></td></tr></table>`;
+function ruleRow(color: string, spacing: number, cls = ''): string {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:${spacing}px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${dmAttr(cls)} style="border-top:1px solid ${cssVal(color)};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table></td></tr></table>`;
 }
 
 /** The hero / card CTA, rendered through the bulletproof Button renderer. */
@@ -163,6 +230,7 @@ function ctaHtml(
   design: Design,
   ctx: RenderCtx,
   align: Align,
+  dv?: Record<string, unknown>,
 ): string {
   if (!v.ctaLabel.trim()) return '';
   const outline = v.ctaStyle === 'outline';
@@ -176,7 +244,13 @@ function ctaHtml(
     align,
     padding: pad(0),
   });
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="${align}" style="padding-top:18px;">${renderBlockInner(btn, design, ctx)}</td></tr></table>`;
+  const darkValues = dv
+    ? {
+        bgColor: outline ? '' : (dv.ctaColor as string),
+        color: outline ? (dv.ctaColor as string) : (dv.ctaTextColor as string),
+      }
+    : undefined;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="${align}" style="padding-top:18px;">${renderBlockInner(btn, design, { ...ctx, darkValues })}</td></tr></table>`;
 }
 
 function networkHref(item: SocialItem): string {
@@ -192,9 +266,10 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
   switch (block.type) {
     case 'heading': {
       const v = block.values;
+      const dv = darkOf(block, ctx);
       const tag = `h${v.level}`;
       const text = esc(v.text).replace(/\n/g, '<br />');
-      return `<${tag} style="margin:0;font-family:${cssVal(v.fontFamily || body.fontFamily)};font-size:${v.fontSize}px;font-weight:${v.fontWeight};line-height:${v.lineHeight}%;color:${cssVal(v.color)};text-align:${v.align};">${text || (ctx.editor ? '&nbsp;' : '')}</${tag}>`;
+      return `<${tag}${dmAttr(dmc(ctx, 'text', v.color, dv?.color))} style="margin:0;font-family:${cssVal(v.fontFamily || body.fontFamily)};font-size:${v.fontSize}px;font-weight:${v.fontWeight};line-height:${v.lineHeight}%;color:${cssVal(v.color)};text-align:${v.align};">${text || (ctx.editor ? '&nbsp;' : '')}</${tag}>`;
     }
     case 'text': {
       const v = block.values;
@@ -204,7 +279,10 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         empty && ctx.editor
           ? '<p style="margin:0;color:#9ca3af;">Write something…</p>'
           : inner;
-      return `<div style="font-family:${cssVal(v.fontFamily || body.fontFamily)};font-size:${v.fontSize}px;line-height:${v.lineHeight}%;color:${cssVal(v.color || body.textColor)};text-align:${v.align};">${content}</div>`;
+      // the class rides on the wrapper, so it reaches anything the rich text nests
+      const dv = darkOf(block, ctx);
+      const cls = dmc(ctx, 'text', v.color || body.textColor, (dv?.color as string) || ctx.dark?.palette.text);
+      return `<div${dmAttr(cls)} style="font-family:${cssVal(v.fontFamily || body.fontFamily)};font-size:${v.fontSize}px;line-height:${v.lineHeight}%;color:${cssVal(v.color || body.textColor)};text-align:${v.align};">${content}</div>`;
     }
     case 'image': {
       const v = block.values;
@@ -221,20 +299,26 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
     }
     case 'button': {
       const v = block.values;
+      const dv = darkOf(block, ctx);
+      const btnCls = dmAttr(dmc(ctx, 'btn', v.bgColor, dv?.bgColor));
+      const labelCls = dmAttr(dmc(ctx, 'btntext', v.color, dv?.color));
       const href = safeUrl(v.href) || '#';
       const border =
         v.borderWidth > 0 ? `border:${v.borderWidth}px solid ${cssVal(v.borderColor)};` : '';
       const fam = cssVal(v.fontFamily || body.fontFamily);
       const widthAttr = v.fullWidth ? ' width="100%"' : '';
       const widthCss = v.fullWidth ? 'width:100%;' : '';
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${v.align}"${widthAttr} style="border-collapse:separate;${widthCss}"><tr><td align="center" bgcolor="${cssVal(v.bgColor)}" style="border-radius:${v.borderRadius}px;${border}mso-padding-alt:${v.innerPaddingV}px ${v.innerPaddingH}px;"><a href="${esc(href)}" target="_blank" style="display:${v.fullWidth ? 'block' : 'inline-block'};padding:${v.innerPaddingV}px ${v.innerPaddingH}px;font-family:${fam};font-size:${v.fontSize}px;font-weight:${v.fontWeight};line-height:1.2;color:${cssVal(v.color)};text-decoration:none;border-radius:${v.borderRadius}px;">${esc(v.label)}</a></td></tr></table>`;
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${v.align}"${widthAttr} style="border-collapse:separate;${widthCss}"><tr><td align="center"${btnCls} bgcolor="${cssVal(v.bgColor)}" style="border-radius:${v.borderRadius}px;${border}mso-padding-alt:${v.innerPaddingV}px ${v.innerPaddingH}px;"><a href="${esc(href)}" target="_blank"${labelCls} style="display:${v.fullWidth ? 'block' : 'inline-block'};padding:${v.innerPaddingV}px ${v.innerPaddingH}px;font-family:${fam};font-size:${v.fontSize}px;font-weight:${v.fontWeight};line-height:1.2;color:${cssVal(v.color)};text-decoration:none;border-radius:${v.borderRadius}px;">${esc(v.label)}</a></td></tr></table>`;
     }
     case 'divider': {
       const v = block.values;
-      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${v.width}%" align="${v.align}" style="width:${v.width}%;"><tr><td style="border-top:${v.thickness}px ${v.lineStyle} ${cssVal(v.color)};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table>`;
+      const dv = darkOf(block, ctx);
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${v.width}%" align="${v.align}" style="width:${v.width}%;"><tr><td${dmAttr(dmc(ctx, 'border', v.color, dv?.color))} style="border-top:${v.thickness}px ${v.lineStyle} ${cssVal(v.color)};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table>`;
     }
     case 'menu': {
       const v = block.values;
+      const dv = darkOf(block, ctx);
+      const mc = dmAttr(dmc(ctx, 'text', v.color, dv?.color));
       const fam = cssVal(v.fontFamily || body.fontFamily);
       const linkStyle = `color:${cssVal(v.color)};text-decoration:none;`;
       const textStyle = `font-family:${fam};font-size:${v.fontSize}px;font-weight:${v.fontWeight};color:${cssVal(v.color)};`;
@@ -242,7 +326,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         const rows = v.items
           .map(
             (it) =>
-              `<tr><td align="${v.align}" style="padding:${Math.round(v.itemPadding / 2)}px 0;${textStyle}"><a href="${esc(safeUrl(it.href) || '#')}" target="_blank" style="${linkStyle}">${esc(it.label)}</a></td></tr>`,
+              `<tr><td align="${v.align}"${mc} style="padding:${Math.round(v.itemPadding / 2)}px 0;${textStyle}"><a href="${esc(safeUrl(it.href) || '#')}" target="_blank"${mc} style="${linkStyle}">${esc(it.label)}</a></td></tr>`,
           )
           .join('');
         return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table>`;
@@ -251,15 +335,17 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         .map((it, i) => {
           const sep =
             v.separator && i < v.items.length - 1
-              ? `<td style="${textStyle}">${esc(v.separator)}</td>`
+              ? `<td${mc} style="${textStyle}">${esc(v.separator)}</td>`
               : '';
-          return `<td style="padding:0 ${v.itemPadding}px;${textStyle}"><a href="${esc(safeUrl(it.href) || '#')}" target="_blank" style="${linkStyle}">${esc(it.label)}</a></td>${sep}`;
+          return `<td${mc} style="padding:0 ${v.itemPadding}px;${textStyle}"><a href="${esc(safeUrl(it.href) || '#')}" target="_blank"${mc} style="${linkStyle}">${esc(it.label)}</a></td>${sep}`;
         })
         .join('');
       return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${v.align}"><tr>${cells}</tr></table>`;
     }
     case 'social': {
       const v = block.values;
+      const dv = darkOf(block, ctx);
+      const monoCls = dmAttr(dmc(ctx, 'bg', v.monoColor, dv?.monoColor));
       const s = v.size;
       const radius = v.shape === 'circle' ? Math.round(s / 2) : v.shape === 'rounded' ? Math.round(s * 0.2) : 0;
       const cells = v.items
@@ -269,7 +355,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           const iconUrl = safeUrl(it.iconUrl);
           const cell = iconUrl
             ? `<a href="${href}" target="_blank"><img src="${esc(iconUrl)}" alt="${esc(meta.label)}" width="${s}" height="${s}" style="display:block;border:0;width:${s}px;height:${s}px;" /></a>`
-            : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="${s}" height="${s}" align="center" valign="middle" bgcolor="${cssVal(v.colorMode === 'mono' ? v.monoColor : meta.color)}" style="width:${s}px;height:${s}px;border-radius:${radius}px;"><a href="${href}" target="_blank" style="display:block;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:${Math.round(s * 0.4)}px;font-weight:bold;line-height:${s}px;text-decoration:none;">${esc(meta.short)}</a></td></tr></table>`;
+            : `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="${s}" height="${s}" align="center" valign="middle"${v.colorMode === 'mono' ? monoCls : ''} bgcolor="${cssVal(v.colorMode === 'mono' ? v.monoColor : meta.color)}" style="width:${s}px;height:${s}px;border-radius:${radius}px;"><a href="${href}" target="_blank" style="display:block;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:${Math.round(s * 0.4)}px;font-weight:bold;line-height:${s}px;text-decoration:none;">${esc(meta.short)}</a></td></tr></table>`;
           return `<td style="padding:0 ${Math.round(v.gap / 2)}px;">${cell}</td>`;
         })
         .join('');
@@ -277,13 +363,15 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
     }
     case 'video': {
       const v = block.values;
+      const dv = darkOf(block, ctx);
+      const capCls = dmAttr(dmc(ctx, 'text', v.captionColor, dv?.captionColor));
       const href = safeUrl(v.url);
       const thumb = safeUrl(videoThumb(v.url, v.thumbnail));
       if (!href && !thumb) return ctx.editor ? placeholder('Video — select this block and paste a YouTube URL') : '';
       if (!thumb) {
         return ctx.editor
           ? placeholder('Add a thumbnail URL for this video (needed for non-YouTube links)')
-          : `<a href="${esc(href)}" target="_blank" style="color:${cssVal(v.captionColor)};font-family:${cssVal(body.fontFamily)};font-size:14px;">${esc(v.caption || 'Watch video')}</a>`;
+          : `<a href="${esc(href)}" target="_blank"${capCls} style="color:${cssVal(v.captionColor)};font-family:${cssVal(body.fontFamily)};font-size:14px;">${esc(v.caption || 'Watch video')}</a>`;
       }
       const cw = Math.max(20, ctx.colWidth - v.padding.left - v.padding.right);
       const w = Math.max(10, Math.round((cw * v.width) / 100));
@@ -294,7 +382,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
       const linked = href ? `<a href="${esc(href)}" target="_blank" style="text-decoration:none;">${img}</a>` : img;
       const caption =
         v.showCaption && href
-          ? `<div style="text-align:${v.align};padding-top:8px;"><a href="${esc(href)}" target="_blank" style="color:${cssVal(v.captionColor)};font-family:${cssVal(body.fontFamily)};font-size:14px;text-decoration:none;">${esc(v.caption)}</a></div>`
+          ? `<div style="text-align:${v.align};padding-top:8px;"><a href="${esc(href)}" target="_blank"${capCls} style="color:${cssVal(v.captionColor)};font-family:${cssVal(body.fontFamily)};font-size:14px;text-decoration:none;">${esc(v.caption)}</a></div>`
           : '';
       return linked + caption;
     }
@@ -307,10 +395,11 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
     /* ------------------------------------------------------------- header */
     case 'header': {
       const v: HeaderValues = block.values;
+      const dv = darkOf(block, ctx);
       const bodyFont = body.fontFamily;
 
       // the brand logo, or the brand name as text when there is no logo
-      const logo = imgTag(v.logoSrc, v.logoAlt || v.fallbackText, v.logoWidth);
+      const logo = logoPair(ctx, v.logoSrc, dv?.logoDarkSrc, v.logoAlt || v.fallbackText, v.logoWidth);
       const mark =
         logo ||
         textRun(v.fallbackText, {
@@ -319,6 +408,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           color: v.fallbackColor,
           weight: 'bold',
           bodyFont,
+          cls: dmc(ctx, 'text', v.fallbackColor, dv?.fallbackColor),
         }) ||
         (ctx.editor ? placeholder('Header — add a logo URL or a brand name') : '');
 
@@ -337,7 +427,9 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
                 padding: pad(0),
               }),
               design,
-              ctx,
+              // a synthetic block has an id that exists in neither design, so
+              // its dark counterpart values are handed across directly
+              { ...ctx, darkValues: dv ? { color: dv.navColor } : undefined },
             )
           : '';
 
@@ -345,6 +437,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         v.borderWidth > 0
           ? `border-bottom:${v.borderWidth}px solid ${cssVal(v.borderColor)};`
           : '';
+      const borderCls = dmAttr(dmc(ctx, 'border', v.borderColor, dv?.borderColor));
       const navCls = v.hideNavOnMobile ? 'eb-hide-mobile' : 'eb-center-mobile';
 
       const inner =
@@ -358,13 +451,14 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
             ]);
 
       return border
-        ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="${border}">${inner}</td></tr></table>`
+        ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${borderCls} style="${border}">${inner}</td></tr></table>`
         : inner;
     }
 
     /* --------------------------------------------------------------- hero */
     case 'hero': {
       const v: HeroValues = block.values;
+      const dv = darkOf(block, ctx);
       const bodyFont = body.fontFamily;
       const centered = v.layout === 'centered';
       const textAlign: Align = centered ? 'center' : 'left';
@@ -377,6 +471,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           weight: 'bold',
           align,
           bodyFont,
+          cls: dmc(ctx, 'text', v.eyebrowColor, dv?.eyebrowColor),
         }) +
         textRun(v.heading, {
           fontFamily: v.headingFontFamily,
@@ -387,6 +482,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           lineHeight: 125,
           bodyFont,
           marginTop: v.eyebrow.trim() ? 8 : 0,
+          cls: dmc(ctx, 'text', v.headingColor, dv?.headingColor),
         }) +
         textRun(v.subtext, {
           fontFamily: '',
@@ -396,6 +492,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           lineHeight: 150,
           bodyFont,
           marginTop: 10,
+          cls: dmc(ctx, 'text', v.subtextColor, dv?.subtextColor),
         });
 
       if (v.layout === 'cards-2' || v.layout === 'cards-3') {
@@ -416,6 +513,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
                 weight: 'bold',
                 bodyFont,
                 marginTop: 12,
+                cls: dmc(ctx, 'text', v.cardTitleColor, dv?.cardTitleColor),
               }) +
               textRun(c.text, {
                 fontFamily: '',
@@ -424,6 +522,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
                 lineHeight: 150,
                 bodyFont,
                 marginTop: 6,
+                cls: dmc(ctx, 'text', v.cardTextColor, dv?.cardTextColor),
               }) +
               linkRun(c.linkLabel, c.linkHref, {
                 fontFamily: '',
@@ -431,6 +530,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
                 color: v.cardLinkColor,
                 bodyFont,
                 marginTop: 8,
+                cls: dmc(ctx, 'link', v.cardLinkColor, dv?.cardLinkColor),
               }),
             { width: cw, style: i < cards.length - 1 ? 'padding-right:12px;' : '' },
           ),
@@ -446,19 +546,20 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         // Outlook ignores background images, so bgColor is the fallback.
         const bgAttr = bgImg ? ` background="${esc(bgImg)}"` : '';
         const bgColor = v.bgColor ? ` bgcolor="${cssVal(v.bgColor)}"` : '';
+        const bgCls = dmAttr(dmc(ctx, 'bg', v.bgColor, dv?.bgColor));
         const bgCss = v.bgColor ? `background-color:${cssVal(v.bgColor)};` : '';
         // the shorthand first, then background-color, so the colour still wins
         // as the Outlook fallback. Written as a shorthand rather than
         // background-position so the export stays clean of any "position:".
         const imgCss = bgImg ? `background:url('${esc(bgImg)}') center / cover no-repeat;` : '';
         const art = imgTag(v.imageSrc, v.imageAlt, Math.max(40, ctx.colWidth - v.padding.left - v.padding.right), 'margin:0 auto;');
-        return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${bgAttr}${bgColor} align="center" style="${imgCss}${bgCss}padding:${bgImg || v.bgColor ? '28px 20px' : '0'};">${copy('center')}${ctaHtml(v, design, ctx, 'center')}${art ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding-top:20px;">${art}</td></tr></table>` : ''}</td></tr></table>`;
+        return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${bgAttr}${bgColor}${bgCls} align="center" style="${imgCss}${bgCss}padding:${bgImg || v.bgColor ? '28px 20px' : '0'};">${copy('center')}${ctaHtml(v, design, ctx, 'center', dv)}${art ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding-top:20px;">${art}</td></tr></table>` : ''}</td></tr></table>`;
       }
 
       // image-left / image-right
       const inner = Math.max(80, ctx.colWidth - v.padding.left - v.padding.right - 16);
       const half = Math.floor(inner / 2);
-      const textCell = col(copy('left') + ctaHtml(v, design, ctx, 'left'), {
+      const textCell = col(copy('left') + ctaHtml(v, design, ctx, 'left', dv), {
         width: half,
         classes: 'eb-center-mobile',
         style: v.layout === 'image-right' ? 'padding-right:16px;' : 'padding-left:16px;',
@@ -473,6 +574,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
     /* ---------------------------------------------------------- articles */
     case 'articles': {
       const v: ArticleListValues = block.values;
+      const dv = darkOf(block, ctx);
       const bodyFont = body.fontFamily;
       const avail = Math.max(80, ctx.colWidth - v.padding.left - v.padding.right);
       const items = v.items.slice(0, 10);
@@ -486,6 +588,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           align,
           lineHeight: 130,
           bodyFont,
+          cls: dmc(ctx, 'text', v.titleColor, dv?.titleColor),
         }) +
         textRun(it.excerpt, {
           fontFamily: '',
@@ -495,6 +598,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           lineHeight: 150,
           bodyFont,
           marginTop: 6,
+          cls: dmc(ctx, 'text', v.excerptColor, dv?.excerptColor),
         }) +
         linkRun(it.readMoreLabel, it.readMoreHref, {
           fontFamily: '',
@@ -503,6 +607,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           align,
           bodyFont,
           marginTop: 8,
+          cls: dmc(ctx, 'link', v.linkColor, dv?.linkColor),
         });
 
       const rendered = items.map((it) => {
@@ -523,7 +628,13 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
       });
 
       const joined = v.showDivider
-        ? rendered.join(ruleRow(v.dividerColor, Math.round(v.itemSpacing / 2)))
+        ? rendered.join(
+            ruleRow(
+              v.dividerColor,
+              Math.round(v.itemSpacing / 2),
+              dmc(ctx, 'border', v.dividerColor, dv?.dividerColor),
+            ),
+          )
         : rendered
             .map((h, i) => (i === 0 ? h : `<div style="height:${v.itemSpacing}px;line-height:${v.itemSpacing}px;font-size:0;">&nbsp;</div>${h}`))
             .join('');
@@ -537,11 +648,14 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
     /* ------------------------------------------------------------- footer */
     case 'footer': {
       const v: FooterValues = block.values;
+      const dv = darkOf(block, ctx);
       const bodyFont = body.fontFamily;
       const align: Align = v.align;
 
-      const logo = imgTag(
+      const logo = logoPair(
+        ctx,
         v.logoSrc,
+        dv?.logoDarkSrc,
         v.logoAlt || 'Logo',
         v.logoWidth,
         align === 'center' ? 'margin:0 auto;' : align === 'right' ? 'margin:0 0 0 auto;' : '',
@@ -559,7 +673,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
                 padding: pad(0),
               }),
               design,
-              ctx,
+              { ...ctx, darkValues: dv ? { monoColor: dv.socialMonoColor } : undefined },
             )
           : '';
 
@@ -572,6 +686,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
           lineHeight: 150,
           bodyFont,
           marginTop,
+          cls: dmc(ctx, 'text', v.textColor, dv?.textColor),
         });
 
       // the unsubscribe href is usually a merge tag, which safeUrl() preserves
@@ -582,10 +697,12 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         align,
         bodyFont,
         marginTop: 12,
+        cls: dmc(ctx, 'link', v.linkColor, dv?.linkColor),
       });
 
       const border =
         v.borderWidth > 0 ? `border-top:${v.borderWidth}px solid ${cssVal(v.borderColor)};` : '';
+      const borderCls = dmAttr(dmc(ctx, 'border', v.borderColor, dv?.borderColor));
 
       const rows = [
         logo ? `<tr><td align="${align}" style="padding-bottom:16px;">${logo}</td></tr>` : '',
@@ -593,7 +710,7 @@ function renderBlockInner(block: Block, design: Design, ctx: RenderCtx): string 
         `<tr><td align="${align}">${line(v.address, 0)}${line(v.legalText, 8)}${unsub}</td></tr>`,
       ].join('');
 
-      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="${border}${border ? 'padding-top:20px;' : ''}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table></td></tr></table>`;
+      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td${borderCls} style="${border}${border ? 'padding-top:20px;' : ''}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table></td></tr></table>`;
     }
   }
 }
@@ -610,6 +727,7 @@ export function renderInlineBlock(block: Block, design: Design, ctx: RenderCtx):
 const SELF_BG: ReadonlySet<string> = new Set(['header', 'hero', 'footer', 'articles']);
 
 export function renderBlock(block: Block, design: Design, ctx: RenderCtx): string {
+  const darkSelf = ctx.dark && SELF_BG.has(block.type) ? darkOf(block, ctx) : undefined;
   // The email-level "Show footer" switch hides footer blocks from preview and
   // export. The editor still draws them, dimmed, so they stay selectable.
   if (block.type === 'footer' && !design.body.showFooter && !ctx.editor) return '';
@@ -619,49 +737,68 @@ export function renderBlock(block: Block, design: Design, ctx: RenderCtx): strin
   const bg = SELF_BG.has(block.type) ? (block.values as { bgColor: string }).bgColor : '';
   const bgAttr = bg ? ` bgcolor="${cssVal(bg)}"` : '';
   const bgCss = bg ? `background-color:${cssVal(bg)};` : '';
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="eb-block"${bgAttr}><tr><td align="${align}" style="${bgCss}${padCss(block.values.padding)}">${inner}</td></tr></table>`;
+  const bgCls = dmAttr(dmc(ctx, 'bg', bg, darkSelf?.bgColor));
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="eb-block"${bgAttr}><tr><td align="${align}"${bgCls} style="${bgCss}${padCss(block.values.padding)}">${inner}</td></tr></table>`;
 }
 
-export function renderRow(row: Row, design: Design): string {
+export function renderRow(row: Row, design: Design, dark?: DarkCtx): string {
   const W = design.body.width;
   const widths = columnWidths(design, row);
   const contentBg = row.contentBgColor || design.body.contentBgColor;
+  const darkRow = dark?.rows.get(row.id);
+  const darkBody = dark?.body;
   const cols = row.columns
     .map((c, i) => {
       const content = c.blocks.length
-        ? c.blocks.map((b) => renderBlock(b, design, { colWidth: widths[i] })).join('')
+        ? c.blocks.map((b) => renderBlock(b, design, { colWidth: widths[i], dark })).join('')
         : '&nbsp;';
       return `<td class="${row.stackOnMobile ? 'eb-col' : 'eb-col-fixed'}" width="${widths[i]}" valign="top" style="width:${widths[i]}px;vertical-align:top;">${content}</td>`;
     })
     .join('');
+  const darkOuter = (darkRow?.bgColor as string) || '';
+  const darkInner =
+    ((darkRow?.contentBgColor as string) || darkBody?.contentBgColor || '') as string;
+  const outerCls = dmAttr(dmClass(dark, 'bg', row.bgColor, darkOuter));
+  const innerCls = dmAttr(dmClass(dark, 'bg', contentBg, darkInner));
+
   const outerBg = row.bgColor
     ? ` bgcolor="${cssVal(row.bgColor)}" style="background-color:${cssVal(row.bgColor)};"`
     : '';
   const innerBg = contentBg
     ? ` bgcolor="${cssVal(contentBg)}" style="background-color:${cssVal(contentBg)};${padCss(row.padding)}"`
     : ` style="${padCss(row.padding)}"`;
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"${outerBg}><tr><td align="center">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"${outerCls}${outerBg}><tr><td align="center">
 <!--[if mso]><table role="presentation" width="${W}" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
-<table role="presentation" class="eb-container" width="${W}" cellpadding="0" cellspacing="0" border="0" style="width:${W}px;max-width:100%;"><tr><td${innerBg}><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cols}</tr></table></td></tr></table>
+<table role="presentation" class="eb-container" width="${W}" cellpadding="0" cellspacing="0" border="0" style="width:${W}px;max-width:100%;"><tr><td${innerCls}${innerBg}><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${cols}</tr></table></td></tr></table>
 <!--[if mso]></td></tr></table><![endif]-->
 </td></tr></table>`;
 }
 
-export function renderDesign(design: Design): string {
+export function renderDesign(design: Design, opts: RenderOpts = {}): string {
   const b = design.body;
   const W = b.width;
+  // 3B: absent unless the caller resolved a dark pass, which it only does when
+  // body.darkMode is on. Everything below that touches it is conditional, so
+  // with dark off this function emits exactly what it emitted before 3B.
+  const dark = opts.dark;
   const preheader = b.preheader
     ? `<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">${esc(b.preheader)}${'&#8199;&zwnj;'.repeat(40)}</div>`
     : '';
-  const rows = design.rows.map((r) => renderRow(r, design)).join('\n');
+  const rows = design.rows.map((r) => renderRow(r, design, dark)).join('\n');
+  const pageCls = dmAttr(dmClass(dark, 'bg', b.bgColor, dark?.body.bgColor));
+  // the rows are already rendered, so every class the body needs is registered
+  const css = dark ? darkCss(dark, rows + pageCls) : '';
+  const headExtra = dark ? `\n${DARK_META}` : '';
+  const htmlAttr = dark?.preview ? ` ${DM_PREVIEW_ATTR}="1"` : '';
+
   return `<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="en"${htmlAttr} xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <meta name="x-apple-disable-message-reformatting" />
-<meta name="format-detection" content="telephone=no,address=no,email=no,date=no,url=no" />
+<meta name="format-detection" content="telephone=no,address=no,email=no,date=no,url=no" />${headExtra}
 <title>${esc(b.title)}</title>
 <!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
 <style>
@@ -677,12 +814,12 @@ export function renderDesign(design: Design): string {
     .eb-center-mobile{text-align:center !important;}
     .eb-hide-mobile{display:none !important;}
     .eb-img{height:auto !important;}
-  }
+  }${css}
 </style>
 </head>
-<body style="margin:0;padding:0;background-color:${cssVal(b.bgColor)};font-family:${cssVal(b.fontFamily)};color:${cssVal(b.textColor)};">
+<body${pageCls} style="margin:0;padding:0;background-color:${cssVal(b.bgColor)};font-family:${cssVal(b.fontFamily)};color:${cssVal(b.textColor)};">
 ${preheader}
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${cssVal(b.bgColor)}" style="background-color:${cssVal(b.bgColor)};"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"${pageCls} bgcolor="${cssVal(b.bgColor)}" style="background-color:${cssVal(b.bgColor)};"><tr><td align="center">
 ${rows}
 </td></tr></table>
 </body>
