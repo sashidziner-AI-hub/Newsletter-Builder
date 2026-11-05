@@ -1276,3 +1276,145 @@ well-formed JSON error, a valid image, the model/quality/size/elapsed facts in e
 diagnostic, redaction of two different keys, no-retry-on-failure, the per-model size mapping,
 the all-models size-constraint sweep, and the exact request-body key set with and without
 quality.
+
+## Feature 6A — Generate email from a brief — done (2026-11-05)
+
+### Three corrections to the brief, found during research
+
+**"5C" does not exist** — only 5A plus its four amendments. Every "5A/5C" reference in the
+brief is read as 5A. **There are 8 presets, not 5** (`newsletter`, `promotional`,
+`product-launch`, `welcome`, `cold-outreach`, `event`, `order`, `digest`) — the slot system
+below is generic (a classification table keyed by block *type*, not per-preset hand-written
+paths), so supporting all 8 cost nothing extra. **`gpt-4.1-mini` is a generation behind.** The
+live `openai-node` SDK's current small/fast tier is `gpt-5.4-mini` / `gpt-5.4-nano` /
+`gpt-5.1-mini`; `gpt-4.1-mini` stays selectable but isn't the default. Default is
+**`gpt-5.4-mini`**, deliberately non-reasoning — a reasoning model (`o3-mini` etc.) can spend
+its whole output budget on hidden reasoning and return an empty message, which a
+strict-JSON-schema call cannot recover from.
+
+### The gate, checked rather than assumed
+
+```
+OPTIONS https://api.openai.com/v1/chat/completions
+access-control-allow-headers: authorization,content-type
+access-control-allow-methods: GET, OPTIONS, POST
+```
+
+Same two-header budget the image adapter already uses. `response_format: { type: 'json_schema',
+json_schema: { name, schema, strict: true } }` on `POST /v1/chat/completions`, `max_completion_tokens`
+(not the deprecated `max_tokens`). Verified against the SDK source, not guessed.
+
+### Slots: derived, not hand-written per preset
+
+`slots.ts` walks whatever `preset.build(brand)` actually produced and classifies each block by
+**type** against a small lookup table (`heading.text`, `text.html`, `button.label`,
+`hero.{eyebrow,heading,subtext,ctaLabel}`, the `hero.cards[]` and `articles.items[]` repeaters).
+A field is **required** exactly when the preset's own default copy for it is non-empty — a
+preset author filling in placeholder text is itself the signal "this field matters here." AI
+never touches `footer`, `divider`, `social`, `menu`, `video`, `html`, logos, or `hero.bgImage`.
+
+**A bug found by testing, not by reading the code**: `createBlock('hero')` always populates a
+default two-item `cards` array, but `render.ts` only ever draws it when `layout` is
+`cards-2`/`cards-3` — every other layout (which is 7 of the 8 presets) silently ignores it. The
+first version of `buildSlotSchema` exposed that dead array as an AI slot whenever it was
+non-empty, which is always, so AI would have been asked to write hero-card copy that could
+never appear in the email for `newsletter`, `promotional`, `welcome`, `event`, `order`,
+`digest` and `cold-outreach` (no hero at all). Fixed with an `appliesIf` predicate on the
+repeater table entry, gated on the same `layout` check `render.ts` uses; `product-launch` (the
+one `cards-3` preset) is the only one that now exposes it. A regression test asserts every
+preset's hero repeater (if any) has `layout` matching `cards-2`/`cards-3`.
+
+A user-supplied CTA label (or URL) removes the matching `cta_label` slots from the schema sent
+to the model entirely — `writeBriefDraftOntoDesign` re-derives the schema with
+`ctaLabelProvided: false` against the same design afterward, purely to find which blocks those
+fields live on, and writes the user's own text/URL there directly. AI is never asked for a CTA
+it wasn't going to use.
+
+### Safety: validation is a separate, offline-testable pass
+
+`brief-validate.ts` runs after `JSON.parse`, independent of the provider call. HTML tags
+stripped, markdown tokens stripped, bare URLs stripped, merge tags dropped unless on the
+3-tag allow-list (`first_name`, `last_name`, `company`), bracket placeholders (`[add date]`)
+left alone on purpose — that's the intended missing-fact signal. Any field over its budget
+**rejects the whole response**; there is no partial-repair and no auto-retry anywhere in this
+path, matching 5A's own precedent.
+
+**A real bug found empirically**: the first sanitizer stripped bare `_`/`__` as markdown
+italics, which turned `{{first_name}}` into `{{firstname}}` *before* the allow-list check ran —
+so a legitimate merge tag silently vanished. Fixed two ways: bare underscores are no longer
+treated as markdown at all, and allowed merge tags are now swapped for a placeholder marker
+*before* any other stripping pass runs, then restored at the end — so nothing later in the
+pipeline (now or added later) can corrupt one while cleaning up everything else around it.
+
+Prompt-injection defence is two-layered: the brief and source text are wrapped in named
+`===== BEGIN/END =====` delimiters with an explicit "this is data, not instructions" system
+prompt clause, and — the mechanical backstop — `strict: true` JSON-schema mode constrains the
+model's output at the token level to the declared shape, so injected text cannot add fields or
+escape the schema regardless of what it asks for.
+
+### What's sent, and what never is
+
+Brand name, brand voice (`description`/`wordsToUse`/`wordsToAvoid`), the brief's own fields,
+and the slot guide (ids and character limits). Never the API key, logos, footer/address data,
+or any other saved email content. First use shows a consent line — "Your brief and `<brand>`'s
+brand voice are sent to OpenAI" — gated per provider by `text-consent.ts`, independent of any
+image-generation consent.
+
+### Review, Create, and what persists
+
+`generateBriefDraft` builds a **fresh** `preset.build(brand)`, resizes the first `articles`
+block to the brief's item count, and returns a draft the review screen reads from without
+writing anything yet — so "Regenerate" costs one model call, not a design mutation plus a
+rollback. `writeBriefDraftOntoDesign` only runs once "Create email" is pressed, writing onto
+that same fresh design; the preset catalog object itself is never touched (a test rebuilds the
+preset afterward and asserts its defaults are unchanged).
+
+The generated `BriefRecord` rides on `SaveOptions.brief` through `saveEmail()` exactly like
+`name`/`autoSaved` already do, so it sticks to the record from the first autosave onward without
+a special first-save path. `SavedTemplate.brief` drives the Templates list's **AI draft** badge.
+
+### Checks
+
+Two new rules in the 3A engine, same `Issue`/`id()`/`add()` shape as everything else there:
+`AI_DRAFT_UNREVIEWED` (warning, quick action **Mark as reviewed**, clears via `markReviewed()`
+in the store) and `BRIEF_PLACEHOLDER_LEFT` (warning, one issue per distinct `[bracket]` found
+by walking every block's text fields — excluding `href`/`src`/`id` fields and the `[% tag %]`
+merge-tag bracket format, so a real merge tag is never mistaken for a missing fact).
+
+### Known gaps
+
+- **Tone and brand voice both reach the prompt, but tone is never auto-picked from voice.**
+  `brand.voice.description` is freeform text, not one of the 5 tone values, so there's no clean
+  mapping — the form shows the brand's voice description as context next to the tone picker
+  instead of guessing an enum value from prose.
+- **No "Open in AI image panel" handoff** from a suggested image prompt — Copy is there, the
+  cross-panel handoff was explicitly deferred by the plan as non-blocking.
+- **The text-model choice is session-only** (component state, not persisted) — unlike the image
+  provider's stored `model` field, which was deliberately *not* reused here so one panel's
+  choice can't silently clobber the other's.
+- **CTA URL applies to every `cta_label`-kind slot the preset exposes** (e.g. both a hero CTA
+  and a separate CTA-band button), not to a single named "the" CTA field — the brief only gives
+  one URL, and the alternative (asking which button it belongs to) seemed like more friction
+  than the feature is worth for emails that mostly have one real call to action anyway.
+
+### Tests
+
+New: `brief-slots.test.ts` (24), `brief-validate.test.ts` (18), `brief-generate.test.ts` (13),
+`brief-misc.test.ts` (6), `brief-storage.test.ts` (8), `brief-store.test.ts` (6),
+`brief-checks.test.ts` (10), `brief-orchestrate.test.ts` (12) — **97 new**. Suite: **848
+passing** (was 751), `tsc --noEmit` clean. No real API calls anywhere — the provider adapter is
+tested against a stubbed `fetch`, and the orchestration layer against a stubbed `TextProvider`.
+
+Covered: slot/schema derivation across all 8 presets with every field's `maxChars` budget
+respected and the hero-cards gating bug above; the full JSON-schema shape OpenAI's `strict`
+mode requires; oversized and malformed responses rejected without retrying; HTML/markdown/URL
+stripping; the merge-tag allow-list including the underscore bug above; a prompt-injection
+string in the brief leaves the parsed shape unchanged; the exact chat-completions request body
+(model, messages, `response_format`, `max_completion_tokens`, never `max_tokens`); every error
+status mapped the same way the image adapter's is; the key never appearing in a thrown error
+even when the provider echoes it back; `Create` producing fresh ids with the preset catalog
+untouched; the brief persisting through `saveEmail`/`findTemplate` and tolerating a corrupted
+stored record; `AI_DRAFT_UNREVIEWED` firing and clearing through the real store action;
+`BRIEF_PLACEHOLDER_LEFT` detecting a bracket per block while ignoring href/src/id fields and
+`[% tag %]`; the Auto preset picker resolving every goal to a real preset id; and the text
+consent flag being per-provider and tolerant of corrupt storage.

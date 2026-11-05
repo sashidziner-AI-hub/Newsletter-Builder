@@ -1,5 +1,6 @@
 import type { Brand, Design } from '../types';
 import { normalizeBrand, veeBrand } from './brand';
+import { type BriefRecord, normalizeBriefRecord } from './ai/brief-types';
 import { type SavedBlock, normalizeSavedBlock } from './blocks-library';
 import { type LibraryImage, normalizeLibraryImage } from './image-storage';
 import { normalizeDesign } from './design-ops';
@@ -50,6 +51,8 @@ export interface SavedTemplate {
   createdBy: string | null;
   updatedBy: string | null;
   schemaVersion: number;
+  /** set when this email was generated from a brief (6A); null for a hand-built one */
+  brief: BriefRecord | null;
 }
 
 function read<T>(key: string): T | null {
@@ -146,6 +149,7 @@ export function listTemplates(): SavedTemplate[] {
         createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
         updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
         schemaVersion: Number(t.schemaVersion) || 1,
+        brief: normalizeBriefRecord(t.brief),
       });
     }
   }
@@ -169,6 +173,8 @@ export interface SaveOptions {
   /** false marks the record as a deliberate save rather than an auto-save */
   autoSaved?: boolean;
   name?: string;
+  /** set once, on the save that follows Create from a brief; every later autosave keeps it */
+  brief?: BriefRecord | null;
 }
 
 /**
@@ -193,6 +199,7 @@ export function saveEmail(
     createdBy: previous?.createdBy ?? null,
     updatedBy: null,
     schemaVersion: SCHEMA_VERSION,
+    brief: opts.brief ?? previous?.brief ?? null,
   };
   return putTemplate(entry);
 }
@@ -211,6 +218,20 @@ export function renameTemplate(id: string, name: string): SavedTemplate | null {
     ...existing,
     name: name.trim() || existing.name,
     autoSaved: false,
+    updatedAt: Date.now(),
+    schemaVersion: SCHEMA_VERSION,
+  };
+  const { result } = putTemplate(entry);
+  return result === 'full' ? null : entry;
+}
+
+/** Flip the "AI draft" reviewed flag (6A) — a no-op when the record has no brief. */
+export function updateBriefReviewed(id: string, reviewed: boolean): SavedTemplate | null {
+  const existing = findTemplate(id);
+  if (!existing?.brief) return null;
+  const entry: SavedTemplate = {
+    ...existing,
+    brief: { ...existing.brief, reviewed },
     updatedAt: Date.now(),
     schemaVersion: SCHEMA_VERSION,
   };

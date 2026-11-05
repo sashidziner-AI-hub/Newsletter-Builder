@@ -1,5 +1,5 @@
 import { produce } from 'immer';
-import type { Brand, BrandDarkColors, BrandSocialLink, Design, SocialNetwork } from '../types';
+import type { Brand, BrandDarkColors, BrandSocialLink, BrandVoice, Design, SocialNetwork } from '../types';
 import { KANIT_STACK, SOCIAL_NETWORKS } from './defaults';
 import { slugify, uid } from './util';
 
@@ -11,9 +11,10 @@ export const TOKEN_PREFIX = 'brand.';
 /**
  * Stamped on brands this module writes. A brand saved before 3B has no
  * `darkTokens` and no version; it reads as version 1 and derives its dark
- * palette, so an existing kit keeps working untouched.
+ * palette, so an existing kit keeps working untouched. 6A adds `voice` at
+ * version 3 the same way — absent reads as "no voice guidance."
  */
-export const BRAND_SCHEMA_VERSION = 2;
+export const BRAND_SCHEMA_VERSION = 3;
 
 export function isBrandToken(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith(TOKEN_PREFIX);
@@ -63,6 +64,8 @@ export function veeBrand(): Brand {
     updatedBy: null,
     // null means "derive one"; see lib/dark.ts
     darkTokens: null,
+    // null means "no voice guidance set"; see lib/brand.ts normalizeBrand (6A)
+    voice: null,
     schemaVersion: BRAND_SCHEMA_VERSION,
   };
 }
@@ -286,6 +289,20 @@ export function normalizeBrand(input: unknown): Brand | null {
     };
   }
 
+  // 6A: same optional-nested-object pattern as darkTokens above
+  const rawVoice = raw.voice;
+  let voice: BrandVoice | null = null;
+  if (rawVoice && typeof rawVoice === 'object') {
+    const v = rawVoice as Record<string, unknown>;
+    const words = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((w): w is string => typeof w === 'string' && w.trim() !== '') : [];
+    voice = {
+      description: str(v.description),
+      wordsToUse: words(v.wordsToUse),
+      wordsToAvoid: words(v.wordsToAvoid),
+    };
+  }
+
   const social: BrandSocialLink[] = [];
   if (Array.isArray(raw.social_links)) {
     for (const item of raw.social_links as Record<string, unknown>[]) {
@@ -326,6 +343,7 @@ export function normalizeBrand(input: unknown): Brand | null {
     },
     social_links: social,
     darkTokens,
+    voice,
     schemaVersion: num(raw.schemaVersion, 1),
     is_active: raw.is_active !== false,
     createdAt: num(raw.createdAt, base.createdAt),

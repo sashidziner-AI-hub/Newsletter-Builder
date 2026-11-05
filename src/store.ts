@@ -10,6 +10,7 @@ import { darkRenderOpts, darkResolved, resolveForOutput } from './lib/output';
 import { renderDesign } from './lib/render';
 import { imageStorage, type LibraryImage } from './lib/image-storage';
 import { draftStore } from './lib/drafts';
+import type { BriefRecord } from './lib/ai/brief-types';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
@@ -28,6 +29,7 @@ import {
   saveLastEmailId,
   saveSampleData,
   saveSavedBlocks,
+  updateBriefReviewed,
 } from './lib/storage';
 
 const HISTORY_LIMIT = 100;
@@ -94,8 +96,13 @@ interface EditorState {
   setChecksOpen: (open: boolean) => void;
   setImageStatus: (statuses: Record<string, 'ok' | 'broken'>) => void;
 
+  /** 6A: the brief this email was generated from, if any — rides along into every save. */
+  currentBrief: BriefRecord | null;
+  /** "Mark as reviewed" in the Checks drawer, clearing AI_DRAFT_UNREVIEWED. */
+  markReviewed: () => void;
+
   openEmail: (record: SavedTemplate) => void;
-  startNewEmail: (design: Design) => void;
+  startNewEmail: (design: Design, brief?: BriefRecord | null) => void;
   saveNow: () => void;
   renameCurrent: (name: string) => void;
   snapshot: (reason: SnapshotReason, note?: string) => void;
@@ -208,6 +215,7 @@ export const useEditor = create<EditorState>((set, get) => {
     checksOpen: false,
     knownDrafts: [],
     draftsChecked: false,
+    currentBrief: null,
     past: [],
     future: [],
     selection: { kind: 'body' },
@@ -270,7 +278,7 @@ export const useEditor = create<EditorState>((set, get) => {
         : {};
 
       // only pass the draft set once it has actually been read
-      const { knownDrafts, draftsChecked } = get();
+      const { knownDrafts, draftsChecked, currentBrief } = get();
       const drafts = draftsChecked ? { knownDrafts: new Set(knownDrafts) } : {};
 
       set({
@@ -279,6 +287,8 @@ export const useEditor = create<EditorState>((set, get) => {
           imageWidths,
           ...dark,
           ...drafts,
+          hasBrief: !!currentBrief,
+          briefReviewed: currentBrief?.reviewed ?? false,
         }),
       });
     },
@@ -297,6 +307,14 @@ export const useEditor = create<EditorState>((set, get) => {
       saveIgnored(get().currentEmailId, next);
     },
 
+    markReviewed: () => {
+      const { currentBrief, currentEmailId } = get();
+      if (!currentBrief) return;
+      set({ currentBrief: { ...currentBrief, reviewed: true } });
+      if (currentEmailId) updateBriefReviewed(currentEmailId, true);
+      get().runChecks();
+    },
+
     /** Open a saved record for editing. Auto-save then updates it in place. */
     openEmail: (record) => {
       set({
@@ -312,6 +330,7 @@ export const useEditor = create<EditorState>((set, get) => {
         // the dismissed warnings belong to this email, not the one just closed
         issues: [],
         ignoredIssues: listIgnored(record.id),
+        currentBrief: record.brief,
       });
       saveLastEmailId(record.id);
     },
@@ -319,8 +338,10 @@ export const useEditor = create<EditorState>((set, get) => {
     /**
      * Start a brand-new email. currentEmailId stays null so the first edit
      * creates its own record rather than overwriting the one just left.
+     * `brief` is set only by 6A's "Create email" flow; every other call site
+     * (a preset pick, a blank canvas) leaves it out and gets `null`.
      */
-    startNewEmail: (design) => {
+    startNewEmail: (design, brief = null) => {
       set({
         design,
         currentEmailId: null,
@@ -333,16 +354,17 @@ export const useEditor = create<EditorState>((set, get) => {
         revision: get().revision + 1,
         issues: [],
         ignoredIssues: [],
+        currentBrief: brief,
       });
       saveLastEmailId(null);
     },
 
     /** Write the open email now, creating its record if this is the first time. */
     saveNow: () => {
-      const { design, currentEmailId } = get();
+      const { design, currentEmailId, currentBrief } = get();
       set({ saveState: { ...get().saveState, status: 'saving' } });
 
-      const { entry, result } = saveEmail(design, { existingId: currentEmailId ?? undefined });
+      const { entry, result } = saveEmail(design, { existingId: currentEmailId ?? undefined, brief: currentBrief });
       if (result === 'full') {
         set({
           saveState: {

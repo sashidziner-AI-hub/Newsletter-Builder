@@ -8,7 +8,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import type { Brand, BrandColors, BrandDarkColors, BrandSocialLink, SocialNetwork } from '../types';
+import type { Brand, BrandColors, BrandDarkColors, BrandSocialLink, BrandVoice, SocialNetwork } from '../types';
 import { canEditBrand, emptyBrand, normalizeBrand } from '../lib/brand';
 import { FONT_STACKS, SOCIAL_NETWORKS } from '../lib/defaults';
 import { darkColors, deriveDarkColors, paletteReadable } from '../lib/dark';
@@ -233,6 +233,12 @@ function BrandForm({
   const setDark = (key: keyof BrandDarkColors, v: string) =>
     onChange({ ...value, darkTokens: { ...dark, ...value.darkTokens, [key]: v } });
   const readable = paletteReadable(dark);
+
+  const setVoice = (patch: Partial<BrandVoice>) =>
+    onChange({
+      ...value,
+      voice: { description: '', wordsToUse: [], wordsToAvoid: [], ...value.voice, ...patch },
+    });
 
   return (
     <>
@@ -474,8 +480,44 @@ function BrandForm({
           <Plus size={14} /> Add social link
         </button>
       </Section>
+
+      <Section title="Voice" defaultOpen={false}>
+        <p className="text-[11px] leading-snug text-slate-400">
+          Used only by "Generate from a brief" (6A), to steer the model's tone and word choice.
+          Leave it blank and that feature just skips it.
+        </p>
+        <TextField
+          label="Description"
+          multiline
+          rows={3}
+          placeholder="e.g. Warm and direct. Short sentences. Never salesy."
+          value={value.voice?.description ?? ''}
+          onChange={(description) => setVoice({ description })}
+        />
+        <TextField
+          label="Words to favour"
+          placeholder="e.g. simple, clear, together"
+          hint="Comma-separated."
+          value={(value.voice?.wordsToUse ?? []).join(', ')}
+          onChange={(v) => setVoice({ wordsToUse: splitWords(v) })}
+        />
+        <TextField
+          label="Words to avoid"
+          placeholder="e.g. cheap, hack, guys"
+          hint="Comma-separated."
+          value={(value.voice?.wordsToAvoid ?? []).join(', ')}
+          onChange={(v) => setVoice({ wordsToAvoid: splitWords(v) })}
+        />
+      </Section>
     </>
   );
+}
+
+function splitWords(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((w) => w.trim())
+    .filter(Boolean);
 }
 
 /* ------------------------------------------------------------------ modal */

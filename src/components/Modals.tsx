@@ -404,6 +404,11 @@ export function TemplatesModal({ onClose, notify }: { onClose: () => void; notif
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-slate-900">
           {t.name}
+          {t.brief && (
+            <span className="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">
+              AI draft
+            </span>
+          )}
           {t.id === currentEmailId && (
             <span className="ml-2 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">
               editing

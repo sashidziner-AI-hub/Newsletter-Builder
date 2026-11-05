@@ -98,6 +98,7 @@ export function ChecksPanel() {
   const open = useEditor((s) => s.checksOpen);
   const setChecksOpen = useEditor((s) => s.setChecksOpen);
   const select = useEditor((s) => s.select);
+  const markReviewed = useEditor((s) => s.markReviewed);
   const ignoreIssue = useEditor((s) => s.ignoreIssue);
   const unignoreIssue = useEditor((s) => s.unignoreIssue);
   const setImageStatus = useEditor((s) => s.setImageStatus);
@@ -123,6 +124,7 @@ export function ChecksPanel() {
 
   /** Jump to the block, leaving the drawer open so the list keeps its place. */
   const go = (issue: Issue) => {
+    if (issue.code === 'AI_DRAFT_UNREVIEWED') return markReviewed();
     if (issue.blockId) select({ kind: 'block', id: issue.blockId });
     else select({ kind: 'body' });
   };
