@@ -33,18 +33,23 @@ import { decodeBase64, readPngSize, toImageBlob } from './validate';
 const BASE = 'https://api.openai.com/v1';
 
 /**
- * The first entry is the panel's default.
- *
- * `gpt-image-2` leads because it is the better image for a marketing hero;
- * `gpt-image-1-mini` stays one line below as the cheap one to iterate on, and
- * the Draft quality setting is the other half of that.
+ * Order is display order only — 6B's task routing owns the actual default,
+ * not array position. The 2.6 generation (added 6B, verified against the
+ * live docs on 2026-11-05) leads: `-flare` is the fast/cheap iteration tier,
+ * `-sunburst` the higher-quality one. Older generations stay listed and
+ * selectable — `gpt-image-2` plain is no longer a valid model id per OpenAI's
+ * current docs, but is left in the list rather than deleted, since removing
+ * it would silently break anyone who had it saved as a provider's stored
+ * model before 6B existed.
  */
 export const OPENAI_MODELS = [
+  'gpt-image-2.6-flare',
+  'gpt-image-2.6-sunburst',
+  'gpt-image-2.5-sunburst',
+  'gpt-image-2.5-flare',
   'gpt-image-2',
   'gpt-image-1-mini',
   'gpt-image-1.5',
-  'gpt-image-2.5-sunburst',
-  'gpt-image-2.5-flare',
   'chatgpt-image-latest',
 ] as const;
 
@@ -56,11 +61,11 @@ const PORTRAIT = '1024x1536';
 /**
  * Models that take an arbitrary `WIDTHxHEIGHT`.
  *
- * The spec names gpt-image-2, its dated snapshot, and the 2.5 variants. The
- * constraints it states are: both dimensions divisible by 16, aspect ratio
- * between 1:3 and 3:1, and no larger than 3840x2160.
+ * The spec names gpt-image-2, its dated snapshot, and every `2.x` variant
+ * (2.5, 2.6). The constraints it states are: both dimensions divisible by 16,
+ * aspect ratio between 1:3 and 3:1, and no larger than 3840x2160.
  */
-const ARBITRARY_SIZE = /^gpt-image-2(\.5)?(-|$)/;
+const ARBITRARY_SIZE = /^gpt-image-2(\.\d+)?(-|$)/;
 
 /**
  * The size to ask for.
@@ -429,4 +434,48 @@ export const PROVIDERS: readonly ImageProvider[] = [openAiProvider];
 
 export function providerById(id: string): ImageProvider | null {
   return PROVIDERS.find((p) => p.id === id) ?? null;
+}
+
+interface ModelsListResponse {
+  data?: { id?: unknown }[];
+}
+
+/**
+ * Image test-connection, 6B: NEVER generates. Reuses the same key-only
+ * `GET /v1/models` check `testKey` already makes, and additionally looks for
+ * the selected model id in the returned list. A key that works but doesn't
+ * list the model isn't a failure — the UI reads that as "Not verified until
+ * first use" rather than either a hard error or a false "Connected."
+ */
+export async function verifyModelListed(model: string, rawKey: string, signal: AbortSignal): Promise<boolean> {
+  const key = normalizeKey(rawKey);
+  const t = withTimeout(signal);
+  const started = Date.now();
+  try {
+    const res = await fetch(`${BASE}/models`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${key}` },
+      signal: t.signal,
+    });
+    if (!res.ok) {
+      throw await classify(res, key, {
+        status: res.status,
+        contentType: res.headers.get('content-type') ?? '',
+        elapsedMs: Date.now() - started,
+        model: 'models',
+        size: '-',
+      });
+    }
+    const body = await res.text();
+    try {
+      const parsed = JSON.parse(body) as ModelsListResponse;
+      return (parsed.data ?? []).some((m) => m.id === model);
+    } catch {
+      return false; // key works, but the list couldn't be read — honestly "not verified", not a failure
+    }
+  } catch (e) {
+    throw toAiError(e);
+  } finally {
+    t.done();
+  }
 }

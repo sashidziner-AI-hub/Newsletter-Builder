@@ -1,6 +1,7 @@
 import { produce } from 'immer';
 import type { Brand, BrandDarkColors, BrandSocialLink, BrandVoice, Design, SocialNetwork } from '../types';
 import { KANIT_STACK, SOCIAL_NETWORKS } from './defaults';
+import { getCurrentUser } from './user';
 import { slugify, uid } from './util';
 
 /** Resolving for the canvas may use uploaded previews; an export may not. */
@@ -97,6 +98,8 @@ export function emptyBrand(name = ''): Brand {
     schemaVersion: BRAND_SCHEMA_VERSION,
     createdAt: now,
     updatedAt: now,
+    createdBy: getCurrentUser().name,
+    updatedBy: getCurrentUser().name,
   };
 }
 

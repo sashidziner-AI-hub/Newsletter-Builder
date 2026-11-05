@@ -36,13 +36,22 @@ const BASE = 'https://api.openai.com/v1';
 const REQUEST_TIMEOUT_MS = 90_000;
 
 /**
- * Newest/most-capable first; the first entry is the default. `gpt-5.4-mini`
- * is deliberately a non-reasoning chat-tier model: the `o`-series and other
- * reasoning models can spend their entire output-token budget on hidden
- * reasoning and return an empty message, which a strict-JSON-schema call
- * cannot recover from (no partial-repair, by this feature's own design).
+ * Order is display order only — 6B's task routing owns the actual default,
+ * not array position. `gpt-6-luna` (added 6B, verified against the live docs
+ * on 2026-11-05) is the current non-reasoning small/fast tier recommended for
+ * structured-output work. Every entry here is deliberately non-reasoning: the
+ * `6.1-terra`/`6.1-sol`/o-series reasoning models can spend their entire
+ * output-token budget on hidden reasoning and return an empty message, which
+ * a strict-JSON-schema call cannot recover from (no partial-repair, by this
+ * feature's own design). Older generations stay listed and selectable.
  */
-export const OPENAI_TEXT_MODELS = ['gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.1-mini', 'gpt-4.1-mini'] as const;
+export const OPENAI_TEXT_MODELS = [
+  'gpt-6-luna',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
+  'gpt-5.1-mini',
+  'gpt-4.1-mini',
+] as const;
 
 function headers(key: string): HeadersInit {
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
@@ -180,6 +189,7 @@ export const openAiTextProvider: TextProvider = {
             json_schema: { name: req.schemaName, schema: req.schema, strict: true },
           },
           max_completion_tokens: req.maxOutputTokens,
+          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
         }),
       });
       if (!res.ok) throw await classify(res, key);
@@ -216,4 +226,31 @@ export const TEXT_PROVIDERS: readonly TextProvider[] = [openAiTextProvider];
 
 export function textProviderById(id: string): TextProvider | null {
   return TEXT_PROVIDERS.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * A tiny, real, cheap probe (6B) — proves the specific model id is actually
+ * callable, unlike `testKey()`'s generic "does this key work at all" check.
+ * One-field schema, ~20-token budget: real spend, deliberately small. Reuses
+ * `generateStructured` rather than a second fetch, so it goes through the
+ * exact same request shape and error classification the real calls do.
+ */
+export async function testTextModel(model: string, key: string, signal: AbortSignal): Promise<void> {
+  await openAiTextProvider.generateStructured(
+    {
+      system: 'Reply only with the requested JSON.',
+      user: 'Return {"ok": true}.',
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+        additionalProperties: false,
+      },
+      schemaName: 'connection_test',
+      model,
+      maxOutputTokens: 20,
+      signal,
+    },
+    key,
+  );
 }

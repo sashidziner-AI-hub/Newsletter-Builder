@@ -52,6 +52,7 @@ function CopyButton({ text }: { text: string }) {
 export function BriefReview({
   draft,
   brand,
+  model,
   chosenSubject,
   onChosenSubjectChange,
   onCreate,
@@ -61,6 +62,7 @@ export function BriefReview({
 }: {
   draft: BriefDraft;
   brand: Brand;
+  model: string;
   chosenSubject: string;
   onChosenSubjectChange: (subject: string) => void;
   onCreate: () => void;
@@ -78,6 +80,7 @@ export function BriefReview({
         <div className="min-w-0 flex-1 space-y-3">
           <p className="text-xs text-slate-500">
             Preset: <span className="font-medium text-slate-700">{preset?.name ?? draft.presetId}</span>
+            <span className="ml-3 text-slate-400">Text model: {model}</span>
           </p>
 
           <div>

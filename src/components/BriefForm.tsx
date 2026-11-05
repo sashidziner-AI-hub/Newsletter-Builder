@@ -55,7 +55,9 @@ export function BriefForm({
   onGenerate,
   busy,
   error,
-  hasKey,
+  ready,
+  model,
+  onOpenAiSettings,
 }: {
   brand: Brand;
   fields: BriefFields;
@@ -63,7 +65,9 @@ export function BriefForm({
   onGenerate: () => void;
   busy: boolean;
   error: string | null;
-  hasKey: boolean;
+  ready: boolean;
+  model: string;
+  onOpenAiSettings: () => void;
 }) {
   const [consented, setConsented] = useState(() => hasTextConsent('openai'));
   const validation = briefError(fields);
@@ -305,12 +309,22 @@ export function BriefForm({
         <span className="text-[11px] text-slate-400">
           {total}/{BRIEF_MAX_CHARS} characters
         </span>
+        <span className="text-[11px] text-slate-400">Text model: {model}</span>
       </div>
 
-      {!hasKey && (
+      {!ready && (
         <p className="flex items-start gap-1.5 rounded bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-800">
           <TriangleAlert size={13} className="mt-px shrink-0" />
-          Add an OpenAI key in AI settings before generating.
+          <span className="flex-1">
+            This needs an OpenAI key, connected in AI settings, before it can generate.
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+            onClick={onOpenAiSettings}
+          >
+            Open AI settings
+          </button>
         </p>
       )}
 
@@ -330,7 +344,7 @@ export function BriefForm({
           <button
             type="button"
             className="inline-flex items-center justify-center gap-1.5 rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-            disabled={!!validation || busy || !hasKey}
+            disabled={!!validation || busy || !ready}
             onClick={agreeAndGenerate}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -341,7 +355,7 @@ export function BriefForm({
         <button
           type="button"
           className="inline-flex items-center justify-center gap-1.5 rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          disabled={!!validation || busy || !hasKey}
+          disabled={!!validation || busy || !ready}
           onClick={onGenerate}
         >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}

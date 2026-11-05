@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
-  Check,
   Download,
   Eye,
   EyeOff,
@@ -15,14 +14,7 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import {
-  AiError,
-  MIN_REQUEST_GAP_MS,
-  type AspectChoice,
-  type ImageQuality,
-  normalizeKey,
-  toAiError,
-} from '../lib/ai/provider';
+import { AiError, type AspectChoice, type ImageQuality, normalizeKey, toAiError } from '../lib/ai/provider';
 import { DEFAULT_STYLE_ID, STYLE_PRESETS, composePrompt, styleById } from '../lib/ai/styles';
 import { PROVIDERS, providerById } from '../lib/ai/openai';
 import {
@@ -36,14 +28,15 @@ import {
   maskKey,
   saveKey,
   setActiveProvider,
-  setModel,
   statusOf,
 } from '../lib/ai/key-store';
+import { currentTaskModel, isTaskReady, runTask } from '../lib/ai/run-task';
 import { draftStore, newDraftId, type DraftImage } from '../lib/drafts';
 import { imageHosting } from '../lib/image-storage';
 import { downloadFile } from '../lib/util';
 import { useActiveBrand, useEditor } from '../store';
 import type { AiTarget } from './fields';
+import { openAiSettings } from './settings/settings-nav';
 
 const ASPECTS: { value: AspectChoice; label: string }[] = [
   { value: 'match', label: 'Match block width' },
@@ -53,13 +46,14 @@ const ASPECTS: { value: AspectChoice; label: string }[] = [
   { value: '4:3', label: '4:3' },
 ];
 
-const STATUS_LABEL: Record<ProviderStatus, string> = {
+/** Exported so 6B's "Models per task" rows can show the same status chip without a second copy. */
+export const STATUS_LABEL: Record<ProviderStatus, string> = {
   'not-configured': 'Not configured',
   configured: 'Configured',
   connected: 'Connected',
 };
 
-const STATUS_STYLE: Record<ProviderStatus, string> = {
+export const STATUS_STYLE: Record<ProviderStatus, string> = {
   'not-configured': 'bg-slate-100 text-slate-500',
   configured: 'bg-amber-100 text-amber-800',
   connected: 'bg-emerald-100 text-emerald-800',
@@ -94,23 +88,24 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   const brand = useActiveBrand();
   const refreshDrafts = useEditor((s) => s.refreshDrafts);
 
-  /** Bumped whenever the key store changes, to re-read it without a subscription. */
+  /** Bumped whenever the key store changes, to re-read task readiness without a subscription. */
   const [keyRevision, setKeyRevision] = useState(0);
   const bumpKeys = () => setKeyRevision((n) => n + 1);
+  void keyRevision; // forces a re-render (and so a fresh read below) after SettingsView calls bumpKeys
 
-  const active = useMemo(() => activeProvider(), [keyRevision]);
-  const activeAdapter = active ? providerById(active) : null;
-  const activeRecord = active ? loadKey(active) : null;
-  const activeConnected = !!active && isConnected(active);
+  // deliberately NOT memoized: task-settings can change from a completely
+  // separate component (Settings > AI > Models per task), which this panel
+  // has no subscription to, so every render re-reads fresh rather than
+  // risking a stale "ready"/model the actual generate() call would then act on
+  const ready = isTaskReady('image.generate');
+  const model = currentTaskModel('image.generate');
 
   /**
    * Which half of the panel is showing. Deliberately independent of whether a
    * key exists — that coupling was the bug: once configured, there was no way
    * back to settings.
    */
-  const [view, setView] = useState<'chat' | 'settings'>(() =>
-    activeProvider() && isConnected(activeProvider()!) ? 'chat' : 'settings',
-  );
+  const [view, setView] = useState<'chat' | 'settings'>(() => (isTaskReady('image.generate') ? 'chat' : 'settings'));
 
   const [prompt, setPrompt] = useState(target.seed ? `${target.seed}` : '');
   const [aspect, setAspect] = useState<AspectChoice>('match');
@@ -121,7 +116,6 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   const [busy, setBusy] = useState(false);
   /** ticks once a second while a generation is in flight, for "Generating 12s" */
   const [now, setNow] = useState(() => Date.now());
-  const lastSent = useRef(0);
   const abort = useRef<AbortController | null>(null);
   const listEnd = useRef<HTMLDivElement>(null);
 
@@ -154,7 +148,7 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
     return ` Use this colour palette: primary ${c.primary}, secondary ${c.secondary}, accent ${c.accent}.`;
   }, [brand]);
 
-  const composerReady = !!activeAdapter && activeConnected && !busy;
+  const composerReady = ready && !busy;
 
   /** An in-flight generation must not outlive the provider it was sent to. */
   const cancelInFlight = () => {
@@ -165,9 +159,7 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
   /* -------------------------------------------------------- generation */
 
   const run = async (text: string) => {
-    if (!activeAdapter || !active) return;
-    const key = loadKey(active)?.key;
-    if (!key) {
+    if (!ready) {
       setView('settings');
       return;
     }
@@ -179,24 +171,20 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
       { id, prompt: text, styleName: style.name, startedAt: Date.now(), state: 'loading' },
     ]);
 
-    const since = Date.now() - lastSent.current;
-    if (since < MIN_REQUEST_GAP_MS) {
-      await new Promise((r) => setTimeout(r, MIN_REQUEST_GAP_MS - since));
-    }
-    lastSent.current = Date.now();
-
     const ctl = new AbortController();
     abort.current = ctl;
     // style first, brand second — the palette should qualify the style, not
     // be buried under it
     const full = composePrompt(text, styleId, useBrandColors ? brandSuffix : '');
-    const model = loadKey(active)?.model || activeAdapter.models[0];
 
     try {
-      const result = await activeAdapter.generate(
-        { prompt: full, aspect, blockWidth: target.blockWidth, model, quality, signal: ctl.signal },
-        key,
-      );
+      const result = await runTask('image.generate', {
+        prompt: full,
+        aspect,
+        blockWidth: target.blockWidth,
+        quality,
+        signal: ctl.signal,
+      });
       const draft: DraftImage = {
         id,
         blob: result.blob,
@@ -271,9 +259,7 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
             <Sparkles size={14} className="shrink-0 text-brand-600" /> AI image
           </h2>
           <p className="truncate text-[11px] text-slate-400">
-            {view === 'chat' && activeAdapter
-              ? `Provider: ${activeAdapter.name} / ${activeRecord?.model || activeAdapter.models[0]}`
-              : target.label}
+            {view === 'chat' ? `Image model: ${model}` : target.label}
           </p>
         </div>
         {/* reachable from both views — this is what was missing */}
@@ -418,12 +404,17 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
 
           {/* ------------------------------------------------------ composer */}
           <div className="shrink-0 space-y-2 border-t border-slate-200 px-4 py-3">
-            {!activeAdapter || !activeConnected ? (
+            {!ready ? (
               <p className="flex items-start gap-1.5 rounded bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-800">
                 <TriangleAlert size={13} className="mt-px shrink-0" />
-                {activeAdapter
-                  ? `${activeAdapter.name} is not connected. Open AI settings and run Test connection.`
-                  : 'No provider is active. Open AI settings to configure one.'}
+                <span className="flex-1">This needs an OpenAI key, connected in AI settings, before it can generate.</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                  onClick={openAiSettings}
+                >
+                  Open AI settings
+                </button>
               </p>
             ) : (
               !imageHosting.configured && (
@@ -527,8 +518,12 @@ export function AiImagePanel({ target, onBack }: { target: AiTarget; onBack: () 
  *
  * A key only becomes the stored one after a passing Test connection, so a
  * failed replacement leaves whatever was working in place.
+ *
+ * Exported so 7A's Settings hub can mount this exact component for its AI
+ * section — same code, same `key-store.ts` module state, rather than a
+ * second implementation that could drift from this one.
  */
-function SettingsView({
+export function SettingsView({
   onChanged,
   onCancelInFlight,
   onDone,
@@ -601,12 +596,6 @@ function SettingsView({
     }
   };
 
-  const makeActive = (id: string) => {
-    onCancelInFlight();
-    setActiveProvider(id);
-    refresh();
-  };
-
   const remove = (id: string) => {
     if (id === active) onCancelInFlight();
     clearKey(id);
@@ -630,20 +619,12 @@ function SettingsView({
       {PROVIDERS.map((provider) => {
         const status = statusOf(provider.id);
         const record = loadKey(provider.id);
-        const isActive = provider.id === active;
         const open = editing === provider.id;
 
         return (
           <section key={provider.id} className="rounded-lg border border-slate-200 p-2.5">
             <div className="flex items-center gap-2">
-              <h3 className="flex-1 truncate text-xs font-semibold text-slate-900">
-                {provider.name}
-                {isActive && (
-                  <span className="ml-1.5 rounded bg-brand-100 px-1 py-0.5 text-[10px] font-bold text-brand-700">
-                    ACTIVE
-                  </span>
-                )}
-              </h3>
+              <h3 className="flex-1 truncate text-xs font-semibold text-slate-900">{provider.name}</h3>
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[status]}`}
               >
@@ -727,11 +708,6 @@ function SettingsView({
                     {testingId === provider.id ? 'Testing…' : 'Test connection'}
                   </button>
                 )}
-                {record && !isActive && (
-                  <button type="button" className={btn} onClick={() => makeActive(provider.id)}>
-                    <Check size={12} /> Set as active
-                  </button>
-                )}
                 {record && (
                   <button type="button" className={btn} onClick={() => remove(provider.id)}>
                     <Trash2 size={12} /> Remove key
@@ -751,30 +727,14 @@ function SettingsView({
                 )}
               </div>
             )}
-
-            {record && (
-              <label className="mt-2 block">
-                <span className="mb-1 block text-[11px] font-medium text-slate-600">Model</span>
-                <select
-                  aria-label={`${provider.name} model`}
-                  className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
-                  value={record.model || provider.models[0]}
-                  onChange={(e) => {
-                    setModel(provider.id, e.target.value);
-                    refresh();
-                  }}
-                >
-                  {provider.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
           </section>
         );
       })}
+
+      <p className="text-[11px] leading-snug text-slate-400">
+        Which model each feature actually uses is set in the "Models per task" section below,
+        not here — this section is only for keys.
+      </p>
 
       <p className="text-[11px] leading-snug text-slate-400">
         Keys stay in this browser — each is sent only to its own provider, and never written into a

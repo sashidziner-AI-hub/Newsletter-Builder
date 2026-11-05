@@ -1418,3 +1418,275 @@ stored record; `AI_DRAFT_UNREVIEWED` firing and clearing through the real store 
 `BRIEF_PLACEHOLDER_LEFT` detecting a bracket per block while ignoring href/src/id fields and
 `[% tag %]`; the Auto preset picker resolving every goal to a real preset id; and the text
 consent flag being per-provider and tolerant of corrupt storage.
+
+## Feature 7A — Profile bar and Settings hub — done (2026-11-05)
+
+### What this replaces
+
+Every "settings" in the app was scattered: brand management only reachable from the top bar,
+AI keys buried inside the AI image panel's own gear icon, merge-tag/UTM/dark-mode defaults
+living as per-email fields with no global default, no single place to see storage usage or
+back up data, and no concept of "who did this" at all — `createdBy`/`updatedBy` on
+`SavedTemplate`/`Brand` were permanently-`null` stubs from 1A. 7A adds one consolidated,
+internal (no login, no roles) home: a profile bar fixed to the bottom of the left panel, and a
+Settings hub that takes over the left panel's content area when open.
+
+### Identity, finally real
+
+`src/lib/user.ts` is new — `getCurrentUser()`/`setDisplayName()`, one namespaced storage key,
+default display name `"Guest"`. `storage.ts`'s `saveEmail()` and `brand.ts`'s `emptyBrand()`
+(the real creation path; the `veeBrand()` seed and `normalizeBrand()`'s reading logic are left
+untouched, so an old record's `createdBy` is read exactly as stored, never silently
+overwritten) now stamp the current display name instead of `null`. Deliberately does **not**
+import `storage.ts`'s `writeSafe` — `storage.ts` itself now calls `getCurrentUser()`, and a
+two-way import between the two would be a real circular dependency, not a theoretical one; a
+profile record is a few dozen bytes, not worth pulling in the quota-pruning machinery to avoid.
+
+### The panel restructure
+
+The left panel's single scrolling `<aside>` splits into a fixed-width shell (`w-64`, widening
+to `w-[360px]` with a CSS transition while Settings is open) containing either the existing
+tabs+content in their own scroll region, or the new `SettingsHub`, plus a `ProfileBar` as a
+non-scrolling sibling pinned to the bottom by flexbox — visible on every tab and while Settings
+is open. Opening Settings snapshots `{ tab, scrollTop }` in a ref; closing restores both.
+Narrow viewports get the hub as a `fixed inset-0` sheet via a `max-md:` Tailwind variant — the
+first responsive behaviour anywhere in the app's own chrome, since none existed to reuse.
+
+`SettingsHub.tsx` is a two-level list/section stack: Escape inside a section goes back to the
+list; Escape at the list closes the whole hub. Seven sections, each a thin wrapper around
+existing logic rather than a second implementation: **Profile** (new), **AI** (wraps
+`AiImagePanel.tsx`'s own `SettingsView` — exported, zero logic change, so the AI panel's own ⚙
+and this section show literally the same component and the same `key-store.ts` state — see 6B
+below for what was added on top), **Brands** (the existing `BrandsModal`, launched as a button,
+plus a new "default brand for new emails" picker), **Email defaults** (new —
+`src/lib/email-defaults.ts`), **Checks** (new bulk-reset UI over the existing
+`ignoredIssues`/`unignoreIssue`/`listIgnored`/`saveIgnored`), **Data & storage** (new —
+`src/lib/backup.ts` / `src/lib/clear-all.ts`), **About** (new).
+
+### Email defaults apply once, at creation, never to what already exists
+
+`applyEmailDefaults(design, defaults)` is a pure overlay, called only at `NewEmailModal.tsx`'s
+three design-creation call sites (preset pick, blank, and 6A's brief "Create") — never inside
+`defaults.ts`/`presets.ts`. Before any customisation, the stored defaults are exactly
+`defaultBody()`'s own baked-in values, so a brand-new email behaves identically to before 7A
+until someone actually changes something in the Email defaults section. An already-open or
+already-saved email is never touched, by construction rather than by a special case.
+
+### Full backup, and what it will never contain
+
+`exportBackup()` gathers brands/templates/saved blocks/image library/versions into one JSON
+object via the existing `list*()` readers. It never imports `key-store.ts` or `drafts.ts` at
+all — a reviewer can confirm the key can't leak from its export path by reading its import
+list alone — which is why "clear all local data" (the one place allowed to touch both) lives
+in a separate file, `clear-all.ts`, instead. Import validates shape by re-running each record
+through the same `normalize*()` functions a normal app load already uses — a malformed
+individual brand or email is dropped, not a reason to fail the whole restore — and only writes
+after the caller shows a summary and the user confirms. The danger zone requires literally
+typing `DELETE` before "Clear all local data" is enabled, and that action also clears the
+remembered AI key and every IndexedDB draft, then reloads.
+
+### Cross-component navigation, 5A's own pattern reused
+
+Nothing new here, but worth noting since 6B's "Open AI settings" button depends on it: 5A
+already solved "a deeply nested component needs to open a top-level panel" with
+`registerAiPanel` (a module-level callback registry in `fields.tsx`). 6B's
+`src/components/settings/settings-nav.ts` is the same pattern applied to the Settings hub —
+see the 6B entry below.
+
+### Known gaps
+
+- **"Default brand for new emails"** only pre-selects in the New email dialog's own brand
+  selector (via the same `setBrandId` mechanism the dropdown already used) — it does not change
+  `useActiveBrand()`'s continuity-based behaviour for the currently open email.
+- **No mobile testing beyond the CSS breakpoint itself** — the `max-md:` sheet is implemented
+  and type-checks, but hasn't been driven through an actual narrow-viewport browser session.
+
+### Tests
+
+New: `user.test.ts` (10), `email-defaults.test.ts` (8), `backup.test.ts` (13),
+`profile-settings.test.tsx` (14) — **45 new**. No real API calls, no real file I/O beyond what
+`writeSafe`/`localStorage` already do in-memory under jsdom.
+
+Covered: the bottom bar's initials/colour/truncation/tooltip and the one-time name hint;
+display name persisting across a reload and feeding `createdBy`/`updatedBy`; Settings
+open/close restoring the exact tab and scroll position; Escape stepping back one level at a
+time, not closing the whole hub from inside a section; every section rendering; email defaults
+applying only to a freshly built design and never touching one already built; a full backup
+round-tripping through JSON, containing zero key material and tolerating a malformed individual
+record; import never writing without a confirm step; clear-all wiping every `email-builder:*`
+key plus IndexedDB drafts.
+
+## Feature 6B — per-task model routing — done (2026-11-05)
+
+### What existed before this, precisely
+
+One global "active provider" plus one model string stored *per provider* (never per feature)
+in `key-store.ts`. 5A's image panel read that stored model; 6A's brief generator ignored it
+entirely and hardcoded `OPENAI_TEXT_MODELS[0]` straight into `NewEmailModal.tsx`. Nothing
+distinguished "the model text generation should use" from "the model image generation should
+use," and nothing let either change without touching the other. There was also no fallback-
+chain code anywhere — "5C," which the brief asked to reuse the chain UI/rules from, does not
+exist in this codebase, the same non-existent feature 6A and 7A's own research already found.
+
+### Both requested defaults were stale enough to be non-functional
+
+Checked live against OpenAI's current docs rather than guessed, per the brief's own
+instruction. `gpt-4.1-mini` and `gpt-image-2` are both gone from the current lineup — not
+merely outdated, genuinely invalid model ids today. Current: **`gpt-6-luna`** (the non-
+reasoning small/fast tier recommended for structured-output work — `gpt-6.1-terra`/`6.1-sol`
+are reasoning models, exactly the empty-reply failure mode 6A already designed around) and
+**`gpt-image-2.6-flare`**/`-sunburst` (the `2.6` generation; plain `gpt-image-2` isn't
+documented as a current id at all). Confirmed with the user before defaulting
+`text.brief`/`image.generate` to these instead of the literal (non-working) ids named in the
+brief. `OPENAI_TEXT_MODELS` and `OPENAI_MODELS` both gained the new entries as their new first
+(default) position, with every older generation kept selectable — nothing already configured
+breaks. `openai.ts`'s `ARBITRARY_SIZE` regex (which decides whether a model takes a custom
+`WIDTHxHEIGHT`) needed widening from matching only `2`/`2.5` to any `2.x`, or the new `2.6`
+models would have silently been sent the wrong image sizes.
+
+### The task registry and the one function every call goes through
+
+`src/lib/ai/tasks.ts`: `AiTaskId = 'text.brief' | 'image.generate'`, a plain string union —
+adding a third task later is one new id and one new `AiTaskDef` entry, nothing else.
+`providersFor(capability)` derives the capability-filtered provider/model list straight from
+the existing `PROVIDERS`/`TEXT_PROVIDERS` arrays and their own `models` lists — no change to
+the `ImageProvider`/`TextProvider` interfaces was needed for "providers declare which
+capabilities/models they support," since that already fell out of which registry a provider is
+in. `src/lib/ai/task-settings.ts` stores one `TaskRoute` (provider, model, options, an ordered
+fallback chain) per task, under its own storage key, with the same normalize-on-read defensive
+pattern `email-defaults.ts` established — and the same reason it skips `writeSafe`: a routing
+record is tiny, and importing `storage.ts` here would risk the same circular-dependency shape
+`user.ts` already avoided.
+
+`src/lib/ai/run-task.ts`'s `runTask<T>(taskId, input)` is genuinely one function, typed per
+task via a small lookup so each call site gets the right input/output shape with no `any` at
+the boundary. It enforces a **per-task** (not global) one-in-flight guard and the existing 2s
+floor via a module-level map keyed by task id — centralised here rather than duplicated as a
+ref in every consuming component, which is what makes "a brief generation in flight never
+blocks an image generation" true by construction. On a `network`/`timeout`/`rate-limit`-
+classified failure it tries the next entry in the task's fallback chain, skipping any candidate
+with no configured key; on anything else — a bad response, a content-policy refusal, an
+invalid key, no credit — it stops immediately, since trying a different model on the same
+account wouldn't fix any of those. This is a deliberate, user-configured fallback *sequence*,
+never the blind same-request retry 5A already ruled out.
+
+`create-from-brief.ts`'s `generateBriefDraft` no longer takes `provider`/`key`/`model` at all —
+it calls `runTask('text.brief', …)` internally. `AiImagePanel.tsx`'s `run()` does the same for
+`'image.generate'`, with the per-generation Quality selector (Draft/Medium/High) now passed
+through as an explicit per-call override that wins over the task's configured default quality
+when given — a real regression caught before it shipped: routing options are task-level
+*defaults*, not a replacement for a choice the UI already exposed per generation.
+
+### Test connection, split exactly as asked
+
+Text: a real, tiny, cheap probe (`testTextModel` in `openai-text.ts`) — a one-field schema, a
+~20-token budget — through the exact same request path and error classification the real calls
+use, so it proves the *specific model id* is callable, not just that the key works. Image:
+`verifyModelListed` in `openai.ts` reuses the existing key-only `GET /v1/models` check (already
+how `testKey` worked — confirmed it never touches the generation endpoint) and additionally
+checks whether the selected model id is in the returned list; a key that works but doesn't list
+the model reads as "Not verified until first use," never a hard failure and never a generation.
+
+### The UI
+
+`AiSection.tsx` keeps the existing `SettingsView` for raw key entry/Test/remove exactly as it
+was, and adds "Models per task" beneath it: one row per task with a capability-filtered
+Provider select, a Model select plus the "Other model id" free-text toggle (this didn't exist
+anywhere before 6B either — added as the small new control the capability-filtered dropdown
+description implied was already there), the task's own quality/temperature option, a status
+chip, its own fallback-chain editor, and — for the text task only — the existing consent flag
+from 6A.
+
+**Two controls had to come out of `SettingsView`, for the same reason.** Once
+`task-settings.ts` is authoritative for routing, its old per-provider Model `<select>` and its
+**"Set as active" button / ACTIVE badge** both stopped affecting anything a real call used.
+The Model select was obvious and removed up front; "Set as active" was caught later, by the
+full suite — `ai-providers.test.tsx` has a two-provider mock and a test that switched the
+active provider mid-generation and expected the in-flight call to reroute. Under per-task
+routing that can't happen by design: which provider a task uses comes from its own route, not
+from a global "currently active" pointer a user could swap underneath a running generation.
+Leaving the button would have been a second, now-misleading place to pick a provider — exactly
+the problem the Model select had. `activeProvider()`/`setActiveProvider()` stay in
+`key-store.ts`: they're now purely an upgrade-path artifact, read once by the migration above.
+
+`BriefForm`/`BriefReview`
+(the brief form footer and review screen) and `AiImagePanel`'s header all show "Text model: …"
+/ "Image model: …" read from the task's current route, never a local constant. When a task
+isn't ready (no key, or not Connected this session), the brief form and the image composer
+show an inline message with an **Open AI settings** button instead of enabling Generate.
+
+That button is `src/components/settings/settings-nav.ts` — the same "a nested component needs
+to open a top-level panel" hole 5A already solved with `registerAiPanel` in `fields.tsx`,
+applied to 7A's `SettingsHub`: `LeftPanel.tsx` registers itself once on mount (re-registering
+whenever its active tab changes, so a later external open always restores the *current* tab,
+not one captured at mount), and the button just calls `openAiSettings()`. For the brief form —
+mounted inside a full-screen modal that covers the left panel — the handler also closes the
+modal first, or the hub opening underneath would be invisible.
+
+### Security
+
+Unchanged in substance, extended in reach: keys still never leave `key-store.ts`, still never
+appear in a URL, a thrown error, or an export — now proven specifically through `runTask`'s own
+error path (a provider echoing the key back in an error body still gets redacted) and through
+`task-settings.ts`'s stored routes (provider id and model string only, migration never copies
+the key itself).
+
+### Known gaps
+
+- **Task settings aren't reactive across components.** `AiSection` (left panel) and
+  `AiImagePanel` (right panel) are separate trees with no shared subscription, so changing a
+  task's model in Settings while the image panel is open won't update that panel's header until
+  it re-renders for some other reason. `ready`/`model` are deliberately *not* memoized so every
+  render re-reads fresh — which closes the correctness hole (a generation never fires on a
+  stale route the user has already changed) and leaves only a cosmetic one. A proper fix is a
+  zustand slice or a pub-sub for task settings; disproportionate to one rare both-panels-open
+  case, so it's a documented gap rather than a built abstraction.
+- **The 2.6 image models inherit 2.5's size rules.** `ARBITRARY_SIZE` was widened to any `2.x`
+  so `gpt-image-2.6-*` is treated as custom-size-capable like its predecessors, but 6B did not
+  re-certify every size/quality parameter of the new generation against the docs — that's 5A's
+  adapter surface, not per-task routing, and re-verifying it would have been scope creep.
+- **"Other model id" is unvalidated by design.** A typed model id is sent as-is; the capability
+  filter only governs the dropdown. Text tasks will surface a bad id on Test connection (a real
+  call); image tasks will read "Not verified until first use," which is the honest answer.
+- **The fallback chain is only as useful as the provider roster.** With one registered provider
+  today, a chain is really "same key, different model." The data model holds multiple providers
+  for when a second one is added; nothing about it is provider-specific.
+
+### Tests
+
+New: `ai-tasks.test.ts` (10), `ai-task-settings.test.ts` (10), `ai-run-task.test.ts` (17),
+`ai-task-ui.test.tsx` (9) — **46 new**, on top of 7A's 45. Combined with the 6A baseline (848)
+and one test deleted below (now obsolete by design, not broken), the full suite stands at
+**935 passing**, `tsc --noEmit` clean. Existing `ai.test.ts`, `brief-generate.test.ts`,
+`brief-orchestrate.test.ts` and `ai-ui.test.tsx` updated for the new defaults and the
+`provider`/`model`-param removal from `generateBriefDraft`; `ai-ui.test.tsx` also needed
+`resetGuardsForTests()` added to its `beforeEach` — `run-task.ts`'s per-task guard is
+module-level, so without an explicit reset one test's throttle/in-flight state was leaking into
+the next, which is exactly the kind of thing that would have been invisible without actually
+running the suite rather than assuming the refactor was safe. No real API calls anywhere —
+mocked `fetch`, same as every existing AI test file.
+
+`ai-providers.test.tsx` (the two-provider mock) needed the most rework, and was worth keeping:
+its real subject — two keys, independently stored, neither ever leaking — is unchanged, but
+every test that drove a *generation* had to learn the new two-step reality, since a configured
+key alone no longer makes a task ready. A `routeImageTaskTo(providerId, model)` helper points
+`image.generate` at a mocked provider first, which is exactly the extra step a real user now
+takes in Settings > AI. One test was deleted rather than repaired (mid-flight active-provider
+switching, which no longer exists as a user action), and one assertion flipped into a better
+one: configuring a key and seeing the task *stay* not-ready is now the correct, documented
+behaviour.
+
+Covered: `runTask` resolving the right model per task and changing one task's route leaving the
+other untouched; a text-only model structurally unable to appear in the image task's dropdown
+and vice versa; `runTask` always dispatching to the capability-matching endpoint even given a
+deliberately misconfigured route; migration seeding `image.generate` from the old active
+provider/model as a one-time, persisted snapshot (not a live mirror — a later key-store change
+doesn't retroactively move it) while `text.brief` takes its coded default; a missing/
+unconnected key calling `fetch` zero times; the fallback chain triggering only on network/
+timeout/rate-limit and never on a validation-class failure; a fallback candidate with no key
+skipped silently; one-in-flight exclusivity per task, proven by two different tasks running
+concurrently without blocking each other; the image test-connection path never touching the
+generation endpoint; the key absent from a thrown error even when the provider echoes it back;
+every Settings-hub task row rendering with the right default and status; and the live, manual
+cross-component check (New email's "Generate from brief" → Open AI settings → lands on Settings
+> AI with the right section open).

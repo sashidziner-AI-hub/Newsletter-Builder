@@ -25,6 +25,7 @@ import { buildSystemPrompt, buildUserMessage } from './brief-prompt';
 import type { BriefFields } from './brief-types';
 import { validateBriefResponse, type ValidatedBriefResult } from './brief-validate';
 import { pickAutoPreset } from './preset-selection';
+import { runTask } from './run-task';
 import {
   buildSlotSchema,
   PREHEADER_MAX_CHARS,
@@ -33,7 +34,6 @@ import {
   SUBJECT_OPTION_COUNT,
   type BriefSlotSchema,
 } from './slots';
-import type { TextProvider } from './text-provider';
 
 export interface BriefDraft {
   presetId: string;
@@ -48,9 +48,6 @@ export type BriefDraftResult = { ok: true; draft: BriefDraft } | { ok: false; re
 export interface GenerateBriefDraftOptions {
   brand: Brand;
   fields: BriefFields;
-  provider: TextProvider;
-  key: string;
-  model: string;
   signal: AbortSignal;
 }
 
@@ -97,18 +94,14 @@ export async function generateBriefDraft(opts: GenerateBriefDraftOptions): Promi
   const schema = buildSlotSchema(resolved.presetId, design, { length: opts.fields.length, ctaLabelProvided });
   const jsonSchema = buildBriefJsonSchema(schema);
 
-  const raw = await opts.provider.generateStructured(
-    {
-      system: buildSystemPrompt(opts.brand),
-      user: buildUserMessage(opts.fields, schema),
-      schema: jsonSchema,
-      schemaName: BRIEF_SCHEMA_NAME,
-      model: opts.model,
-      maxOutputTokens: estimateMaxOutputTokens(schema),
-      signal: opts.signal,
-    },
-    opts.key,
-  );
+  const raw = await runTask('text.brief', {
+    system: buildSystemPrompt(opts.brand),
+    user: buildUserMessage(opts.fields, schema),
+    schema: jsonSchema,
+    schemaName: BRIEF_SCHEMA_NAME,
+    maxOutputTokens: estimateMaxOutputTokens(schema),
+    signal: opts.signal,
+  });
 
   const result = validateBriefResponse(raw, schema);
   if (!result.ok) return { ok: false, reason: result.reason };

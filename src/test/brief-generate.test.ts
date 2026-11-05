@@ -250,8 +250,13 @@ describe('openAiTextProvider — registration', () => {
   });
 
   it('defaults to a non-reasoning chat-tier model', () => {
-    expect(OPENAI_TEXT_MODELS[0]).toBe('gpt-5.4-mini');
+    // 6B: gpt-6-luna leads the list (verified current as of 2026-11-05); older
+    // non-reasoning generations stay selectable below it
+    expect(OPENAI_TEXT_MODELS[0]).toBe('gpt-6-luna');
+    expect(OPENAI_TEXT_MODELS).toContain('gpt-5.4-mini');
     expect(OPENAI_TEXT_MODELS).not.toContain('o3-mini');
     expect(OPENAI_TEXT_MODELS).not.toContain('o4-mini');
+    expect(OPENAI_TEXT_MODELS).not.toContain('gpt-6.1-terra');
+    expect(OPENAI_TEXT_MODELS).not.toContain('gpt-6.1-sol');
   });
 });

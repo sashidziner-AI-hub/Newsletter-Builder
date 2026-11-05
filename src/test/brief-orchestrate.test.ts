@@ -1,34 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { veeBrand } from '../lib/brand';
 import { generateBriefDraft, writeBriefDraftOntoDesign } from '../lib/ai/create-from-brief';
 import { defaultBriefFields } from '../lib/ai/brief-types';
 import { AiError } from '../lib/ai/provider';
-import type { TextProvider } from '../lib/ai/text-provider';
+import { clearAllKeys, markConnected, saveKey, setActiveProvider } from '../lib/ai/key-store';
 import { PRESETS } from '../lib/presets';
 import type { ArticleItem, Block, Design } from '../types';
 
 const vee = veeBrand();
+const KEY = 'sk-test-key';
 
 /** Fills every slot/repeater/image field with short placeholder text, matching whatever schema is sent. */
-function stubProvider(transform?: (schema: object) => void): TextProvider {
-  return {
-    id: 'openai',
-    name: 'OpenAI',
-    models: ['gpt-5.4-mini'],
-    async testKey() {},
-    async generateStructured(req) {
-      transform?.(req.schema as object);
-      // The schema is strict JSON-schema; walk its declared shape rather than
-      // re-deriving one independently, so this stub stays correct even if
-      // slots.ts changes field names later.
-      const schema = req.schema as {
-        properties: Record<string, unknown>;
-      };
-      return fillFromJsonSchema(schema);
-    },
-  };
-}
-
 function fillFromJsonSchema(node: Record<string, unknown>): unknown {
   if (Array.isArray(node.anyOf)) {
     const str = (node.anyOf as Record<string, unknown>[]).find((s) => s.type === 'string');
@@ -48,62 +30,78 @@ function fillFromJsonSchema(node: Record<string, unknown>): unknown {
   return null;
 }
 
-function failingProvider(err: unknown): TextProvider {
-  return {
-    id: 'openai',
-    name: 'OpenAI',
-    models: ['gpt-5.4-mini'],
-    async testKey() {},
-    async generateStructured() {
-      throw err;
-    },
-  };
+const okResponse = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+const fetchMock = vi.fn();
+
+/** Responds to a real /chat/completions call by filling whatever schema it was sent. */
+function respondBySchema() {
+  fetchMock.mockImplementation((_url: string, init: { body: string }) => {
+    const body = JSON.parse(init.body) as { response_format: { json_schema: { schema: object } } };
+    const content = JSON.stringify(fillFromJsonSchema(body.response_format.json_schema.schema as Record<string, unknown>));
+    return okResponse({ choices: [{ message: { content } }] });
+  });
 }
+
+function setupKey() {
+  saveKey('openai', 'unused', KEY, true);
+  setActiveProvider('openai');
+  markConnected('openai', true);
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  clearAllKeys();
+  fetchMock.mockReset();
+  vi.stubGlobal('fetch', fetchMock);
+  setupKey();
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const baseOpts = (overrides: Partial<Parameters<typeof generateBriefDraft>[0]> = {}) => ({
   brand: vee,
   fields: { ...defaultBriefFields(), topic: 'Diwali sale', goal: 'promote' as const, presetId: 'promotional' },
-  provider: stubProvider(),
-  key: 'sk-test-key',
-  model: 'gpt-5.4-mini',
   signal: new AbortController().signal,
   ...overrides,
 });
 
 describe('generateBriefDraft', () => {
   it('resolves an explicit preset id and produces a schema-matching draft', async () => {
+    respondBySchema();
     const result = await generateBriefDraft(baseOpts());
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.draft.presetId).toBe('promotional');
   });
 
   it('resolves Auto via pickAutoPreset when no preset id is given', async () => {
+    respondBySchema();
     const result = await generateBriefDraft(baseOpts({ fields: { ...defaultBriefFields(), topic: 'x', goal: 'welcome', presetId: null } }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.draft.presetId).toBe('welcome');
   });
 
   it('fails cleanly on an unknown preset id, without calling the provider', async () => {
-    const provider = stubProvider();
-    const spy = vi.spyOn(provider, 'generateStructured');
-    const result = await generateBriefDraft(baseOpts({ fields: { ...defaultBriefFields(), topic: 'x', presetId: 'not-a-real-preset' }, provider }));
+    respondBySchema();
+    const result = await generateBriefDraft(baseOpts({ fields: { ...defaultBriefFields(), topic: 'x', presetId: 'not-a-real-preset' } }));
     expect(result.ok).toBe(false);
-    expect(spy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('resizes the articles repeater before deriving the schema sent to the model', async () => {
-    const provider = stubProvider();
-    const spy = vi.spyOn(provider, 'generateStructured');
+    respondBySchema();
     await generateBriefDraft(
       baseOpts({
         fields: { ...defaultBriefFields(), topic: 'x', presetId: 'newsletter', articleCount: 5 },
-        provider,
       }),
     );
     // newsletter's hero also carries a default `cards` repeater (unrelated to
     // this preset's layout, inherited from createBlock('hero')'s defaults) —
     // select the articles one by id rather than assuming it is the only one.
-    const sentSchema = spy.mock.calls[0][0].schema as { properties: { repeaters: { properties: Record<string, { minItems: number }> } } };
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const sentSchema = sentBody.response_format.json_schema.schema as {
+      properties: { repeaters: { properties: Record<string, { minItems: number }> } };
+    };
     const [, articlesSchema] = Object.entries(sentSchema.properties.repeaters.properties).find(([id]) =>
       id.includes('articles'),
     )!;
@@ -111,34 +109,29 @@ describe('generateBriefDraft', () => {
   });
 
   it('propagates a provider AiError untouched, for the caller to show Regenerate', async () => {
-    const err = new AiError('rate-limit');
-    await expect(generateBriefDraft(baseOpts({ provider: failingProvider(err) }))).rejects.toBe(err);
+    fetchMock.mockImplementation(() => okResponse({ error: { code: 'rate_limit_exceeded' } }, 429));
+    const err: AiError = await generateBriefDraft(baseOpts()).catch((e) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect(err.kind).toBe('rate-limit');
   });
 
   it('returns ok:false (not a throw) when the response fails validation', async () => {
-    const badProvider: TextProvider = {
-      id: 'openai',
-      name: 'OpenAI',
-      models: ['gpt-5.4-mini'],
-      async testKey() {},
-      async generateStructured() {
-        return { subjectOptions: [], preheader: '', slots: {} }; // empty subjectOptions is invalid
-      },
-    };
-    const result = await generateBriefDraft(baseOpts({ provider: badProvider }));
+    fetchMock.mockImplementation(() =>
+      okResponse({ choices: [{ message: { content: JSON.stringify({ subjectOptions: [], preheader: '', slots: {} }) } }] }),
+    );
+    const result = await generateBriefDraft(baseOpts());
     expect(result.ok).toBe(false);
   });
 
   it('a user-supplied CTA label removes cta_label fields from the schema sent to the model', async () => {
-    const provider = stubProvider();
-    const spy = vi.spyOn(provider, 'generateStructured');
+    respondBySchema();
     await generateBriefDraft(
       baseOpts({
         fields: { ...defaultBriefFields(), topic: 'x', presetId: 'promotional', ctaLabel: 'Shop now' },
-        provider,
       }),
     );
-    const sentSchema = spy.mock.calls[0][0].schema as { properties: { slots: { properties: Record<string, unknown> } } };
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const sentSchema = sentBody.response_format.json_schema.schema as { properties: { slots: { properties: Record<string, unknown> } } };
     const slotKeys = Object.keys(sentSchema.properties.slots.properties);
     // promotional's hero.ctaLabel slot id contains "ctaLabel"
     expect(slotKeys.some((k) => k.includes('ctaLabel'))).toBe(false);
@@ -152,6 +145,7 @@ describe('writeBriefDraftOntoDesign', () => {
   }
 
   it('writes AI text onto the design, and sets the chosen subject + preheader', async () => {
+    respondBySchema();
     const result = await generateBriefDraft(baseOpts());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -163,6 +157,7 @@ describe('writeBriefDraftOntoDesign', () => {
   });
 
   it('applies the user CTA label onto the slot the AI schema excluded, without touching AI-filled text', async () => {
+    respondBySchema();
     const fields = { ...defaultBriefFields(), topic: 'x', presetId: 'promotional', ctaLabel: 'Shop now' };
     const result = await generateBriefDraft(baseOpts({ fields }));
     expect(result.ok).toBe(true);
@@ -175,6 +170,7 @@ describe('writeBriefDraftOntoDesign', () => {
   });
 
   it('applies an https CTA URL onto the matching href field, and ignores a non-https one', async () => {
+    respondBySchema();
     const fields = { ...defaultBriefFields(), topic: 'x', presetId: 'promotional', ctaUrl: 'https://example.com/sale' };
     const result = await generateBriefDraft(baseOpts({ fields }));
     expect(result.ok).toBe(true);
@@ -192,6 +188,7 @@ describe('writeBriefDraftOntoDesign', () => {
   });
 
   it('writes repeater items onto the design in order', async () => {
+    respondBySchema();
     const fields = { ...defaultBriefFields(), topic: 'x', presetId: 'newsletter', articleCount: 2 };
     const result = await generateBriefDraft(baseOpts({ fields }));
     expect(result.ok).toBe(true);
@@ -207,6 +204,7 @@ describe('writeBriefDraftOntoDesign', () => {
   });
 
   it('never mutates the PRESETS catalog itself — a second build is unaffected', async () => {
+    respondBySchema();
     const fields = { ...defaultBriefFields(), topic: 'x', presetId: 'promotional', ctaLabel: 'Shop now' };
     const result = await generateBriefDraft(baseOpts({ fields }));
     if (!result.ok) return;

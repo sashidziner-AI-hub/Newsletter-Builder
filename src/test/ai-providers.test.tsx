@@ -65,6 +65,8 @@ import {
   isConnected,
   loadKey,
 } from '../lib/ai/key-store';
+import { resetGuardsForTests } from '../lib/ai/run-task';
+import { loadTaskSettings, setTaskRoute } from '../lib/ai/task-settings';
 import { resolveForOutput } from '../lib/output';
 import { renderDesign } from '../lib/render';
 import { veeBrand } from '../lib/brand';
@@ -111,9 +113,21 @@ function rejectValidate(host: string) {
   });
 }
 
+/**
+ * 6B: generation now routes through the `image.generate` task's configured
+ * provider/model (`task-settings.ts`), not "whichever provider is active" —
+ * so a test that wants a real generation to actually reach a provider must
+ * point the task at it explicitly, the same extra step a real user now
+ * takes in Settings > AI > Models per task.
+ */
+function routeImageTaskTo(providerId: string, model: string) {
+  setTaskRoute('image.generate', { ...loadTaskSettings()['image.generate'], providerId, model });
+}
+
 beforeEach(() => {
   localStorage.clear();
   clearAllKeys();
+  resetGuardsForTests();
   vi.stubGlobal('fetch', fetchMock);
   fetchMock.mockReset();
   vi.stubGlobal('URL', Object.assign(URL, {
@@ -170,11 +184,20 @@ describe('AI settings with more than one provider', () => {
     await waitFor(() => expect(screen.getByLabelText('Image prompt')).toBeTruthy());
     expect(loadKey('alpha')?.key).toBe(KEY_A);
     expect(loadKey('beta')).toBeNull();
-    // the chat header names the active provider and model
-    expect(screen.getByText(/Provider: Alpha Images \/ alpha-1/)).toBeTruthy();
+    // a configured key alone does not make the image task ready — its route
+    // still points at the task's own default provider until told otherwise
+    expect(screen.getByText(/needs an OpenAI key/)).toBeTruthy();
+
+    // task-settings isn't reactive across components, so changing it from
+    // outside React needs a state change here to force a re-render — the
+    // same settings/chat toggle a real user would otherwise cause themselves
+    act(() => routeImageTaskTo('alpha', 'alpha-1'));
+    fireEvent.click(screen.getByLabelText('AI settings'));
+    fireEvent.click(screen.getByLabelText('Back to chat'));
+    expect(screen.getByText(/Image model: alpha-1/)).toBeTruthy();
   });
 
-  it('adds a second provider and makes it active, keeping both keys', async () => {
+  it('adds a second provider, keeping both keys independent', async () => {
     routeAll();
     render(<App />);
     openPanel();
@@ -185,13 +208,9 @@ describe('AI settings with more than one provider', () => {
     await configure('Beta Pictures', KEY_B);
     await waitFor(() => expect(isConnected('beta')).toBe(true));
 
-    // beta is not active yet, so the settings view stays put
-    fireEvent.click(sectionFor('Beta Pictures').getByText('Set as active'));
-
-    await waitFor(() => {
-      expect(sectionFor('Beta Pictures').getByText('ACTIVE')).toBeTruthy();
-    });
-    // both keys survive, separately
+    // both keys survive, separately — routing which task uses which is a
+    // separate step now (Settings > AI > Models per task), not implied by
+    // which key was configured most recently
     expect(loadKey('alpha')?.key).toBe(KEY_A);
     expect(loadKey('beta')?.key).toBe(KEY_B);
   });
@@ -217,12 +236,17 @@ describe('AI settings with more than one provider', () => {
     expect(JSON.stringify(localStorage)).not.toContain('REPLACEMENT');
   });
 
-  it('disables the composer when the active key is removed', async () => {
+  it('disables the composer when the routed key is removed', async () => {
     routeAll();
     render(<App />);
     openPanel();
     await configure('Alpha Images', KEY_A);
     await waitFor(() => expect(screen.getByLabelText('Image prompt')).toBeTruthy());
+
+    act(() => routeImageTaskTo('alpha', 'alpha-1'));
+    fireEvent.click(screen.getByLabelText('AI settings'));
+    fireEvent.click(screen.getByLabelText('Back to chat'));
+    expect((screen.getByLabelText('Image prompt') as HTMLTextAreaElement).disabled).toBe(false);
 
     fireEvent.click(screen.getByLabelText('AI settings'));
     fireEvent.click(sectionFor('Alpha Images').getByText('Remove key'));
@@ -230,46 +254,13 @@ describe('AI settings with more than one provider', () => {
 
     fireEvent.click(screen.getByLabelText('Back to chat'));
     expect((screen.getByLabelText('Image prompt') as HTMLTextAreaElement).disabled).toBe(true);
-    expect(screen.getByText(/No provider is active/)).toBeTruthy();
+    expect(screen.getByText(/needs an OpenAI key/)).toBeTruthy();
   });
 
-  it('cancels an in-flight generation when the active provider changes, keeping the messages', async () => {
-    render(<App />);
-    openPanel();
-
-    // alpha connects, then its generation hangs until aborted
-    fetchMock.mockImplementation((url: string, init: RequestInit) => {
-      if (String(url).includes('/validate')) return new Response('{}', { status: 200 });
-      return new Promise((_res, rej) => {
-        init.signal?.addEventListener('abort', () =>
-          rej(new DOMException('aborted', 'AbortError')),
-        );
-      });
-    });
-    await configure('Alpha Images', KEY_A);
-    await waitFor(() => expect(screen.getByLabelText('Image prompt')).toBeTruthy());
-
-    fireEvent.change(screen.getByLabelText('Image prompt'), { target: { value: 'a slow one' } });
-    fireEvent.click(screen.getByLabelText('Generate'));
-    await waitFor(() => expect(screen.getByText('Cancel')).toBeTruthy(), { timeout: 5000 });
-
-    // configure beta and switch to it while alpha is still in flight
-    fireEvent.click(screen.getByLabelText('AI settings'));
-    routeAll();
-    await configure('Beta Pictures', KEY_B);
-    await waitFor(() => expect(isConnected('beta')).toBe(true));
-    fireEvent.click(sectionFor('Beta Pictures').getByText('Set as active'));
-
-    // the messages live in the chat view, so come back to see them
-    fireEvent.click(screen.getByText('Back to chat'));
-    await waitFor(() => expect(screen.getByText('Generation cancelled.')).toBeTruthy(), {
-      timeout: 6000,
-    });
-    // the session is intact: the prompt bubble is still there
-    expect(screen.getAllByText('a slow one', { selector: 'p' })).toHaveLength(1);
-    // and the newly active provider is the one named in the header
-    expect(screen.getByText(/Provider: Beta Pictures/)).toBeTruthy();
-  }, 20_000);
+  // 6B: "Set as active" / mid-flight provider switching no longer exists —
+  // generation routing comes from task-settings, set once in Settings > AI,
+  // not from a live "currently active provider" a user could swap under a
+  // running generation. Basic cancel-in-flight coverage lives in ai-ui.test.tsx.
 
   it('remembers keys per provider across a reload', async () => {
     routeAll();
@@ -307,6 +298,8 @@ describe('two providers, two keys, neither escapes', () => {
     fireEvent.click(screen.getByLabelText('AI settings'));
     await configure('Beta Pictures', KEY_B, true);
     await waitFor(() => expect(isConnected('beta')).toBe(true));
+    // route the task at alpha so a real (mocked) generation attempt is made
+    act(() => routeImageTaskTo('alpha', 'alpha-1'));
 
     // provoke an error from each provider, which may echo the request back
     fetchMock.mockImplementation((url: string) =>

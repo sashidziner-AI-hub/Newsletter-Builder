@@ -11,6 +11,7 @@ import { renderDesign } from './lib/render';
 import { imageStorage, type LibraryImage } from './lib/image-storage';
 import { draftStore } from './lib/drafts';
 import type { BriefRecord } from './lib/ai/brief-types';
+import { getCurrentUser } from './lib/user';
 import { cloneWithNewIds, createBlock, createRow, defaultBody, emptyDesign } from './lib/defaults';
 import { applyRowLayout, findBlock, findColumn, findRowIndex } from './lib/design-ops';
 import { emptyBrand, getAccessibleBrands, resolveBrand } from './lib/brand';
@@ -656,7 +657,7 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     upsertBrand: (brand) => {
-      const next = { ...brand, updatedAt: Date.now() };
+      const next = { ...brand, updatedAt: Date.now(), updatedBy: getCurrentUser().name };
       const list = get().brands;
       writeBrands(
         list.some((b) => b.id === next.id)

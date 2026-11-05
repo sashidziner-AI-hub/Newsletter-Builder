@@ -1,6 +1,7 @@
 import type { Brand, Design } from '../types';
 import { normalizeBrand, veeBrand } from './brand';
 import { type BriefRecord, normalizeBriefRecord } from './ai/brief-types';
+import { getCurrentUser } from './user';
 import { type SavedBlock, normalizeSavedBlock } from './blocks-library';
 import { type LibraryImage, normalizeLibraryImage } from './image-storage';
 import { normalizeDesign } from './design-ops';
@@ -129,29 +130,36 @@ export function saveDraft(design: Design): boolean {
   return write(DRAFT_KEY, design);
 }
 
+/** Exported so a full-backup import (7A) can normalize each record the same way a normal load does. */
+export function normalizeTemplate(raw: unknown): SavedTemplate | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  const design = normalizeDesign(t.design);
+  if (!design || typeof t.id !== 'string') return null;
+  const updatedAt = Number(t.updatedAt) || 0;
+  return {
+    id: t.id,
+    name: typeof t.name === 'string' ? t.name : 'Untitled',
+    updatedAt,
+    createdAt: Number(t.createdAt) || updatedAt,
+    brandId: design.brandId,
+    design,
+    // absent on pre-2B records, which were all saved on purpose
+    autoSaved: t.autoSaved === true,
+    createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
+    updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
+    schemaVersion: Number(t.schemaVersion) || 1,
+    brief: normalizeBriefRecord(t.brief),
+  };
+}
+
 export function listTemplates(): SavedTemplate[] {
-  const raw = read<Record<string, unknown>[]>(TEMPLATES_KEY);
+  const raw = read<unknown[]>(TEMPLATES_KEY);
   if (!Array.isArray(raw)) return [];
   const out: SavedTemplate[] = [];
   for (const t of raw) {
-    const design = normalizeDesign(t?.design);
-    if (design && typeof t.id === 'string') {
-      const updatedAt = Number(t.updatedAt) || 0;
-      out.push({
-        id: t.id,
-        name: typeof t.name === 'string' ? t.name : 'Untitled',
-        updatedAt,
-        createdAt: Number(t.createdAt) || updatedAt,
-        brandId: design.brandId,
-        design,
-        // absent on pre-2B records, which were all saved on purpose
-        autoSaved: t.autoSaved === true,
-        createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
-        updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
-        schemaVersion: Number(t.schemaVersion) || 1,
-        brief: normalizeBriefRecord(t.brief),
-      });
-    }
+    const template = normalizeTemplate(t);
+    if (template) out.push(template);
   }
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -159,6 +167,11 @@ export function listTemplates(): SavedTemplate[] {
 export function findTemplate(id: string | null): SavedTemplate | null {
   if (!id) return null;
   return listTemplates().find((t) => t.id === id) ?? null;
+}
+
+/** Bulk replace, for restoring a full backup (7A) — every other write goes through `saveEmail`. */
+export function saveTemplates(templates: SavedTemplate[]): WriteResult {
+  return writeSafe(TEMPLATES_KEY, templates);
 }
 
 function putTemplate(entry: SavedTemplate): { entry: SavedTemplate; result: WriteResult } {
@@ -196,8 +209,8 @@ export function saveEmail(
     brandId: design.brandId,
     design,
     autoSaved: opts.autoSaved ?? previous?.autoSaved ?? true,
-    createdBy: previous?.createdBy ?? null,
-    updatedBy: null,
+    createdBy: previous?.createdBy ?? getCurrentUser().name,
+    updatedBy: getCurrentUser().name,
     schemaVersion: SCHEMA_VERSION,
     brief: opts.brief ?? previous?.brief ?? null,
   };
@@ -339,6 +352,11 @@ export function listVersions(): VersionRecord[] {
   return out.sort((a, b) => b.at - a.at);
 }
 
+/** Bulk replace, for restoring a full backup (7A) — every other write goes through `addVersion`. */
+export function saveVersions(versions: VersionRecord[]): WriteResult {
+  return writeSafe(VERSIONS_KEY, versions);
+}
+
 /**
  * Append a snapshot and prune to the per-email cap. The caller decides *whether*
  * to snapshot (see `shouldSnapshot`); this just stores it.
@@ -454,4 +472,9 @@ export function saveIgnored(emailId: string | null, ids: string[]): WriteResult 
   if (ids.length > 0) byEmail[emailId] = ids;
   else delete byEmail[emailId];
   return writeSafe(IGNORED_KEY, { byEmail, schemaVersion: SCHEMA_VERSION });
+}
+
+/** Reset every email's dismissed-warnings list at once (7A's Checks settings section). */
+export function clearAllIgnored(): WriteResult {
+  return writeSafe(IGNORED_KEY, { byEmail: {}, schemaVersion: SCHEMA_VERSION });
 }

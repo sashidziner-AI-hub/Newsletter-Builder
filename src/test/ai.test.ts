@@ -659,8 +659,9 @@ describe('the OpenAI adapter', () => {
   it('lists current model ids and no retired one', () => {
     expect(openAiProvider.models.length).toBeGreaterThan(0);
     expect(openAiProvider.models).not.toContain('gpt-image-1');
-    // the default is the better image; the cheap one is still one line below
-    expect(openAiProvider.models[0]).toBe('gpt-image-2');
+    // 6B: the 2.6 generation leads the list; older generations stay selectable
+    expect(openAiProvider.models[0]).toBe('gpt-image-2.6-flare');
+    expect(openAiProvider.models).toContain('gpt-image-2.6-sunburst');
     expect(openAiProvider.models).toContain('gpt-image-1-mini');
   });
 });

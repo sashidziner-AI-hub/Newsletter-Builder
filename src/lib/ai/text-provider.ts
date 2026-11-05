@@ -21,6 +21,8 @@ export interface GenerateStructuredRequest {
   schemaName: string;
   model: string;
   maxOutputTokens: number;
+  /** 0–2, OpenAI's own range; omitted lets the model use its own default (6B) */
+  temperature?: number;
   signal: AbortSignal;
 }
 

@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FilePlus2, Wand2 } from 'lucide-react';
 import type { Brand, Design } from '../types';
 import { resolvedDesign } from '../lib/output';
 import { emptyDesign } from '../lib/defaults';
+import { applyEmailDefaults, loadEmailDefaults } from '../lib/email-defaults';
 import { PRESETS, type Preset } from '../lib/presets';
 import { renderDesign } from '../lib/render';
 import { useAccessibleBrands, useActiveBrand, useEditor } from '../store';
@@ -12,9 +13,9 @@ import { BriefForm } from './BriefForm';
 import { BriefReview } from './BriefReview';
 import { defaultBriefFields, type BriefFields, type BriefRecord } from '../lib/ai/brief-types';
 import { generateBriefDraft, writeBriefDraftOntoDesign, type BriefDraft } from '../lib/ai/create-from-brief';
-import { openAiTextProvider, OPENAI_TEXT_MODELS } from '../lib/ai/openai-text';
-import { loadKey } from '../lib/ai/key-store';
-import { MIN_REQUEST_GAP_MS, toAiError } from '../lib/ai/provider';
+import { currentTaskModel, isTaskReady } from '../lib/ai/run-task';
+import { openAiSettings } from './settings/settings-nav';
+import { toAiError } from '../lib/ai/provider';
 
 /** Width the renderer lays out at; thumbnails are this scaled down. */
 const DESIGN_WIDTH = 600;
@@ -103,6 +104,18 @@ export function NewEmailModal({
   const confirm = useConfirm();
   const [tab, setTab] = useState<'presets' | 'brief'>('presets');
 
+  // 7A: pre-select the configured default brand once, the same way the brand
+  // selector below already works (setBrandId previews against the current
+  // design) — a no-op when no default is set or it doesn't resolve to a real,
+  // accessible brand.
+  useEffect(() => {
+    const defaultBrandId = loadEmailDefaults().defaultBrandId;
+    if (defaultBrandId && defaultBrandId !== brand.id && brands.some((b) => b.id === defaultBrandId)) {
+      setBrandId(defaultBrandId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // built once per brand: each build() mints fresh ids, so these previews are
   // throwaway copies and never the designs that get applied
   const previews = useMemo(
@@ -131,7 +144,7 @@ export function NewEmailModal({
       // snapshot the outgoing email before the canvas is replaced
       snapshot('pre-replace', 'Before starting from a preset');
       // a fresh build, not the preview copy; a new email, not an edit of this one
-      startNewEmail({ ...preset.build(brand), brandId: brand.id });
+      startNewEmail(applyEmailDefaults({ ...preset.build(brand), brandId: brand.id }));
       notify(`Started from "${preset.name}"`);
       onClose();
     });
@@ -139,7 +152,7 @@ export function NewEmailModal({
   const blank = () =>
     replaceThen(() => {
       snapshot('pre-replace', 'Before starting a blank email');
-      startNewEmail({ ...emptyDesign(), brandId: brand.id });
+      startNewEmail(applyEmailDefaults({ ...emptyDesign(), brandId: brand.id }));
       notify('New blank email');
       onClose();
     });
@@ -251,32 +264,20 @@ function BriefTab({
   const [chosenSubject, setChosenSubject] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const lastSent = useRef(0);
 
-  const key = loadKey('openai')?.key ?? null;
+  const ready = isTaskReady('text.brief');
+  const model = currentTaskModel('text.brief');
 
   const generate = async () => {
     if (busy) return;
-    if (!key) {
-      setError('Add an OpenAI key in AI settings before generating.');
+    if (!ready) {
+      setError('text.brief task not ready.'); // the inline setup message covers this; generate() stays unreachable while !ready
       return;
     }
     setError(null);
     setBusy(true);
-
-    const since = Date.now() - lastSent.current;
-    if (since < MIN_REQUEST_GAP_MS) await new Promise((r) => setTimeout(r, MIN_REQUEST_GAP_MS - since));
-    lastSent.current = Date.now();
-
     try {
-      const result = await generateBriefDraft({
-        brand,
-        fields,
-        provider: openAiTextProvider,
-        key,
-        model: OPENAI_TEXT_MODELS[0],
-        signal: new AbortController().signal,
-      });
+      const result = await generateBriefDraft({ brand, fields, signal: new AbortController().signal });
       if (!result.ok) {
         setError(result.reason);
         return;
@@ -301,7 +302,7 @@ function BriefTab({
         reviewed: false,
         generatedAt: Date.now(),
       };
-      startNewEmail({ ...draft.design, brandId: brand.id }, brief);
+      startNewEmail(applyEmailDefaults({ ...draft.design, brandId: brand.id }), brief);
       notify('Created from a brief');
       onClose();
     });
@@ -312,6 +313,7 @@ function BriefTab({
       <BriefReview
         draft={draft}
         brand={brand}
+        model={model}
         chosenSubject={chosenSubject}
         onChosenSubjectChange={setChosenSubject}
         onCreate={create}
@@ -330,7 +332,14 @@ function BriefTab({
       onGenerate={() => void generate()}
       busy={busy}
       error={error}
-      hasKey={!!key}
+      ready={ready}
+      model={model}
+      onOpenAiSettings={() => {
+        // the modal covers the whole screen, so the hub underneath isn't
+        // visible until this closes
+        openAiSettings();
+        onClose();
+      }}
     />
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { Check, Download, Pencil, Search, Trash2, Upload, X } from 'lucide-react';
 import type { BlockType } from '../types';
@@ -19,6 +19,9 @@ import { useConfirm } from './ConfirmDialog';
 import { BlockIcon } from './icons';
 import { SavedBlockThumb } from './SavedBlockThumb';
 import { ImageLibrary } from './ImageLibrary';
+import { ProfileBar } from './ProfileBar';
+import { SettingsHub, type SectionId } from './settings/SettingsHub';
+import { registerSettingsOpener } from './settings/settings-nav';
 
 type Tab = 'content' | 'rows' | 'saved' | 'images';
 
@@ -352,6 +355,40 @@ export function LeftPanel({ notify }: { notify: (m: string) => void }) {
   const savedCount = useEditor((s) => s.savedBlocks.length);
   const [tab, setTab] = useState<Tab>('content');
 
+  /* ------------------------------------------------------- Settings hub (7A) */
+  const [hubOpen, setHubOpen] = useState(false);
+  const [hubSection, setHubSection] = useState<SectionId | null>(null);
+  const [profileRevision, setProfileRevision] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const restoreRef = useRef<{ tab: Tab; scrollTop: number } | null>(null);
+
+  const openHub = (initialSection: SectionId | null) => {
+    restoreRef.current = { tab, scrollTop: scrollRef.current?.scrollTop ?? 0 };
+    setHubSection(initialSection);
+    setHubOpen(true);
+  };
+
+  // re-registers whenever `tab` changes, so a later external open (via
+  // settings-nav.ts) always restores the tab that's actually active right
+  // now, not a stale one captured on mount
+  useEffect(() => {
+    registerSettingsOpener(openHub);
+    return () => registerSettingsOpener(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const closeHub = () => {
+    setHubOpen(false);
+    setHubSection(null);
+    const restore = restoreRef.current;
+    if (restore) {
+      setTab(restore.tab);
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = restore.scrollTop;
+      });
+    }
+  };
+
   /** Click-to-add: put the block where the user is currently working. */
   const addBlockSmart = (type: BlockType) => {
     const st = useEditor.getState();
@@ -378,86 +415,109 @@ export function LeftPanel({ notify }: { notify: (m: string) => void }) {
   ];
 
   return (
-    <aside className="scroll-thin flex w-64 shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white">
-      <div className="sticky top-0 z-10 flex gap-1 border-b border-slate-200 bg-white px-3 pt-2">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`border-b-2 px-1.5 py-2 text-xs font-medium ${
-              tab === t.id
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'content' && (
-        <>
-          <div className="border-b border-slate-200 px-4 py-3">
-            <p className="text-[11px] leading-snug text-slate-400">
-              Drag onto the canvas, or click to add.
-            </p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 p-3">
-            {BLOCK_META.map((m) => (
-              <Tile
-                key={m.type}
-                id={`tool:${m.type}`}
-                data={{ kind: 'tool', blockType: m.type }}
-                title={`Add ${m.label}`}
-                onClick={() => addBlockSmart(m.type)}
+    <aside
+      className={`flex shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 ${
+        hubOpen ? 'w-[360px] max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full' : 'w-64'
+      }`}
+    >
+      {hubOpen ? (
+        <SettingsHub
+          section={hubSection}
+          onSelectSection={setHubSection}
+          onBackToList={() => setHubSection(null)}
+          onClose={closeHub}
+          onProfileSaved={() => setProfileRevision((n) => n + 1)}
+          notify={notify}
+        />
+      ) : (
+        <div ref={scrollRef} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+          <div className="sticky top-0 z-10 flex gap-1 border-b border-slate-200 bg-white px-3 pt-2">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`border-b-2 px-1.5 py-2 text-xs font-medium ${
+                  tab === t.id
+                    ? 'border-brand-600 text-brand-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
               >
-                <BlockIcon type={m.type} />
-                {m.label}
-              </Tile>
+                {t.label}
+              </button>
             ))}
           </div>
-        </>
+
+          {tab === 'content' && (
+            <>
+              <div className="border-b border-slate-200 px-4 py-3">
+                <p className="text-[11px] leading-snug text-slate-400">
+                  Drag onto the canvas, or click to add.
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 p-3">
+                {BLOCK_META.map((m) => (
+                  <Tile
+                    key={m.type}
+                    id={`tool:${m.type}`}
+                    data={{ kind: 'tool', blockType: m.type }}
+                    title={`Add ${m.label}`}
+                    onClick={() => addBlockSmart(m.type)}
+                  >
+                    <BlockIcon type={m.type} />
+                    {m.label}
+                  </Tile>
+                ))}
+              </div>
+            </>
+          )}
+
+          {tab === 'rows' && (
+            <>
+              <div className="border-b border-slate-200 px-4 py-3">
+                <p className="text-[11px] leading-snug text-slate-400">
+                  Pick a column layout for a new row.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3">
+                {ROW_LAYOUTS.map((l, i) => {
+                  const total = l.layout.reduce((a, b) => a + b, 0);
+                  return (
+                    <Tile
+                      key={l.label}
+                      id={`layout:${i}`}
+                      data={{ kind: 'layout', layout: l.layout }}
+                      title={`Add ${l.label} row`}
+                      onClick={() => addRow(l.layout)}
+                    >
+                      <div className="flex h-5 w-full gap-1">
+                        {l.layout.map((n, j) => (
+                          <div
+                            key={j}
+                            className="rounded-sm bg-slate-300"
+                            style={{ width: `${(n / total) * 100}%` }}
+                          />
+                        ))}
+                      </div>
+                      {l.label}
+                    </Tile>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {tab === 'saved' && <SavedBlocksTab notify={notify} />}
+
+          {tab === 'images' && <ImageLibrary notify={notify} />}
+        </div>
       )}
 
-      {tab === 'rows' && (
-        <>
-          <div className="border-b border-slate-200 px-4 py-3">
-            <p className="text-[11px] leading-snug text-slate-400">
-              Pick a column layout for a new row.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 p-3">
-            {ROW_LAYOUTS.map((l, i) => {
-              const total = l.layout.reduce((a, b) => a + b, 0);
-              return (
-                <Tile
-                  key={l.label}
-                  id={`layout:${i}`}
-                  data={{ kind: 'layout', layout: l.layout }}
-                  title={`Add ${l.label} row`}
-                  onClick={() => addRow(l.layout)}
-                >
-                  <div className="flex h-5 w-full gap-1">
-                    {l.layout.map((n, j) => (
-                      <div
-                        key={j}
-                        className="rounded-sm bg-slate-300"
-                        style={{ width: `${(n / total) * 100}%` }}
-                      />
-                    ))}
-                  </div>
-                  {l.label}
-                </Tile>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {tab === 'saved' && <SavedBlocksTab notify={notify} />}
-
-      {tab === 'images' && <ImageLibrary notify={notify} />}
+      <ProfileBar
+        revision={profileRevision}
+        onOpenSettings={() => openHub(null)}
+        onOpenProfile={() => openHub('profile')}
+      />
     </aside>
   );
 }
