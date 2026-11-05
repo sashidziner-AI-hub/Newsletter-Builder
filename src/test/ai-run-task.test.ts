@@ -88,8 +88,8 @@ describe('runTask — per-task routing', () => {
   });
 
   it('changing one task leaves the other unaffected', () => {
-    setTaskRoute('text.brief', { ...loadTaskSettings()['text.brief'], model: 'gpt-4.1-mini' });
-    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2.6-flare');
+    setTaskRoute('text.brief', { ...loadTaskSettings()['text.brief'], model: 'gpt-5.4-mini' });
+    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2');
   });
 
   it('always dispatches to the capability-matching endpoint, regardless of what the stored model string looks like', async () => {
@@ -137,10 +137,10 @@ describe('isTaskReady', () => {
 
 describe('currentTaskModel', () => {
   it('reflects whatever is currently configured for that task', () => {
-    expect(currentTaskModel('text.brief')).toBe('gpt-6-luna');
+    expect(currentTaskModel('text.brief')).toBe('gpt-4.1-mini');
     setTaskRoute('text.brief', { ...loadTaskSettings()['text.brief'], model: 'gpt-5.1-mini' });
     expect(currentTaskModel('text.brief')).toBe('gpt-5.1-mini');
-    expect(currentTaskModel('image.generate')).toBe('gpt-image-2.6-flare');
+    expect(currentTaskModel('image.generate')).toBe('gpt-image-2');
   });
 });
 

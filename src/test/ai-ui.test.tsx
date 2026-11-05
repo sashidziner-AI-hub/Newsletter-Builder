@@ -399,7 +399,7 @@ describe('style presets', () => {
 
     expect(lastBody().quality).toBe('low');
     // 6B: the image.generate task's default, not a provider-level "active model" anymore
-    expect(lastBody().model).toBe('gpt-image-2.6-flare');
+    expect(lastBody().model).toBe('gpt-image-2');
   });
 });
 

@@ -26,6 +26,14 @@ describe('AI_TASKS registry', () => {
     const keys = ALL_TASK_IDS.map((id) => AI_TASKS[id].settingsKey);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  it('defaults to exactly the models chosen, not the newest ones available', () => {
+    // small fix, 2026-11-05: gpt-6-luna / gpt-image-2.6-flare are newer per
+    // OpenAI's docs and stay selectable, but must never be the default —
+    // only a model the user actually picked may be
+    expect(AI_TASKS['text.brief'].defaultModel).toBe('gpt-4.1-mini');
+    expect(AI_TASKS['image.generate'].defaultModel).toBe('gpt-image-2');
+  });
 });
 
 describe('providersFor', () => {

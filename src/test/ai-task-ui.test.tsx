@@ -36,8 +36,8 @@ describe('Settings > AI > Models per task', () => {
     openAiSection();
     expect(screen.getByRole('heading', { name: 'Generate from brief' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'AI image generation' })).toBeTruthy();
-    expect(screen.getByDisplayValue('gpt-6-luna')).toBeTruthy();
-    expect(screen.getByDisplayValue('gpt-image-2.6-flare')).toBeTruthy();
+    expect(screen.getByDisplayValue('gpt-4.1-mini')).toBeTruthy();
+    expect(screen.getByDisplayValue('gpt-image-2')).toBeTruthy();
   });
 
   it('each task row only offers models for its own capability', () => {
@@ -53,31 +53,31 @@ describe('Settings > AI > Models per task', () => {
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
 
-    expect(briefOptions).toContain('gpt-6-luna');
-    expect(briefOptions).not.toContain('gpt-image-2.6-flare');
-    expect(imageOptions).toContain('gpt-image-2.6-flare');
-    expect(imageOptions).not.toContain('gpt-6-luna');
+    expect(briefOptions).toContain('gpt-4.1-mini');
+    expect(briefOptions).not.toContain('gpt-image-2');
+    expect(imageOptions).toContain('gpt-image-2');
+    expect(imageOptions).not.toContain('gpt-4.1-mini');
   });
 
   it('changing one task model does not change the other, and persists', () => {
     render(<App />);
     openAiSection();
-    const briefModelSelect = screen.getByDisplayValue('gpt-6-luna');
+    const briefModelSelect = screen.getByDisplayValue('gpt-4.1-mini');
     fireEvent.change(briefModelSelect, { target: { value: 'gpt-5.4-mini' } });
 
     expect(loadTaskSettings()['text.brief'].model).toBe('gpt-5.4-mini');
-    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2.6-flare');
+    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2');
   });
 
-  it('Reset to defaults restores both tasks', () => {
+  it('Reset to defaults restores both tasks to the exact chosen defaults', () => {
     render(<App />);
     openAiSection();
-    fireEvent.change(screen.getByDisplayValue('gpt-6-luna'), { target: { value: 'gpt-4.1-mini' } });
-    expect(loadTaskSettings()['text.brief'].model).toBe('gpt-4.1-mini');
+    fireEvent.change(screen.getByDisplayValue('gpt-4.1-mini'), { target: { value: 'gpt-5.4-mini' } });
+    expect(loadTaskSettings()['text.brief'].model).toBe('gpt-5.4-mini');
 
     fireEvent.click(screen.getByText('Reset to defaults'));
-    expect(loadTaskSettings()['text.brief'].model).toBe('gpt-6-luna');
-    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2.6-flare');
+    expect(loadTaskSettings()['text.brief'].model).toBe('gpt-4.1-mini');
+    expect(loadTaskSettings()['image.generate'].model).toBe('gpt-image-2');
   });
 
   it("Test connection for the image task never hits the generation endpoint", async () => {
@@ -85,7 +85,7 @@ describe('Settings > AI > Models per task', () => {
     setActiveProvider('openai');
     markConnected('openai', true);
     const fetchMock = vi.fn((_url: string) =>
-      Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'gpt-image-2.6-flare' }] }), { status: 200 })),
+      Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }), { status: 200 })),
     );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -99,6 +99,73 @@ describe('Settings > AI > Models per task', () => {
     expect(fetchMock.mock.calls.every((c) => String(c[0]).includes('/models'))).toBe(true);
     vi.unstubAllGlobals();
   });
+
+  it("image Test connection reads \"Key OK, model access not verified until first use.\" when the model isn't listed", async () => {
+    saveKey('openai', 'unused', 'sk-test-key', true);
+    setActiveProvider('openai');
+    markConnected('openai', true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'some-other-model' }] }), { status: 200 }))),
+    );
+
+    render(<App />);
+    openAiSection();
+    const imageRow = screen.getByRole('heading', { name: 'AI image generation' }).closest('div')!.parentElement!;
+    fireEvent.click(within(imageRow).getByText('Test connection'));
+
+    await vi.waitFor(() =>
+      expect(within(imageRow).getByText('Key OK, model access not verified until first use.')).toBeTruthy(),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("text Test connection against a 403 flips the chip to \"No access to <model>\" with the hint", async () => {
+    saveKey('openai', 'unused', 'sk-test-key', true);
+    setActiveProvider('openai');
+    markConnected('openai', true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ error: { code: 'insufficient_permissions' } }), { status: 403 }))),
+    );
+
+    render(<App />);
+    openAiSection();
+    const briefRow = screen.getByRole('heading', { name: 'Generate from brief' }).closest('div')!.parentElement!;
+    fireEvent.click(within(briefRow).getByText('Test connection'));
+
+    await vi.waitFor(() => expect(within(briefRow).getByText('No access to gpt-4.1-mini')).toBeTruthy());
+    expect(
+      within(briefRow).getByText("Choose another model or enable this one in your OpenAI project's Allowed models."),
+    ).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it('changing the model clears the "No access" chip, and a later successful test restores "Connected"', async () => {
+    saveKey('openai', 'unused', 'sk-test-key', true);
+    setActiveProvider('openai');
+    markConnected('openai', true);
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ error: { code: 'insufficient_permissions' } }), { status: 403 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+    openAiSection();
+    const briefRow = screen.getByRole('heading', { name: 'Generate from brief' }).closest('div')!.parentElement!;
+    fireEvent.click(within(briefRow).getByText('Test connection'));
+    await vi.waitFor(() => expect(within(briefRow).getByText('No access to gpt-4.1-mini')).toBeTruthy());
+
+    fireEvent.change(within(briefRow).getByDisplayValue('gpt-4.1-mini'), { target: { value: 'gpt-5.4-mini' } });
+    expect(within(briefRow).queryByText(/No access to/)).toBeNull();
+
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })),
+    );
+    fireEvent.click(within(briefRow).getByText('Test connection'));
+    await vi.waitFor(() => expect(within(briefRow).getByText('Connected')).toBeTruthy());
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('BriefForm — not ready / model line', () => {
@@ -107,7 +174,7 @@ describe('BriefForm — not ready / model line', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New email' }));
     fireEvent.click(screen.getByRole('button', { name: 'Generate from brief' }));
     expect(screen.getByText(/needs an OpenAI key/)).toBeTruthy();
-    expect(screen.getByText('Text model: gpt-6-luna')).toBeTruthy();
+    expect(screen.getByText('Text model: gpt-4.1-mini')).toBeTruthy();
   });
 
   it('"Open AI settings" closes the modal and opens Settings > AI', () => {
@@ -139,6 +206,6 @@ describe('AiImagePanel — not ready / model line', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate with AI' }));
     fireEvent.click(screen.getByLabelText('Back to chat'));
     expect(screen.getByText(/needs an OpenAI key/)).toBeTruthy();
-    expect(screen.getByText(/Image model: gpt-image-2\.6-flare/)).toBeTruthy();
+    expect(screen.getByText('Image model: gpt-image-2')).toBeTruthy();
   });
 });

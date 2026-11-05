@@ -45,13 +45,20 @@ export interface AiTaskDef {
   settingsKey: string;
 }
 
+/**
+ * These two defaults are deliberately the literal ids the user chose, not
+ * whichever model is newest — `gpt-6-luna` / `gpt-image-2.6-flare` are more
+ * current per OpenAI's docs (both are still listed below, selectable), but
+ * "do not default to a model I have not chosen" is the explicit rule here.
+ * "Reset to defaults" must land back on exactly these two.
+ */
 export const AI_TASKS: Record<AiTaskId, AiTaskDef> = {
   'text.brief': {
     id: 'text.brief',
     label: 'Generate from brief',
     capability: 'text',
     defaultProviderId: 'openai',
-    defaultModel: 'gpt-6-luna',
+    defaultModel: 'gpt-4.1-mini',
     defaultOptions: { temperature: 'low' },
     settingsKey: 'text.brief',
   },
@@ -60,7 +67,7 @@ export const AI_TASKS: Record<AiTaskId, AiTaskDef> = {
     label: 'AI image generation',
     capability: 'image',
     defaultProviderId: 'openai',
-    defaultModel: 'gpt-image-2.6-flare',
+    defaultModel: 'gpt-image-2',
     defaultOptions: { quality: 'medium' },
     settingsKey: 'image.generate',
   },

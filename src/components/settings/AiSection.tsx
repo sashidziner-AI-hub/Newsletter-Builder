@@ -2,8 +2,11 @@ import { useState } from 'react';
 import { Check, Loader2, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { SettingsView, STATUS_LABEL, STATUS_STYLE } from '../AiImagePanel';
 import { loadKey, statusOf } from '../../lib/ai/key-store';
+import { clearModelAccessDenied, deniedModelFor, recordModelAccessDenied } from '../../lib/ai/model-access';
 import { verifyModelListed } from '../../lib/ai/openai';
 import { testTextModel } from '../../lib/ai/openai-text';
+import { isModelAccessError } from '../../lib/ai/run-task';
+import { toAiError } from '../../lib/ai/provider';
 import { hasTextConsent } from '../../lib/ai/text-consent';
 import {
   AI_TASKS,
@@ -117,6 +120,7 @@ function TaskRow({ taskId, onChanged }: { taskId: AiTaskId; onChanged: () => voi
   };
 
   const status = statusOf(route.providerId);
+  const denied = deniedModelFor(taskId, route.model);
 
   const runTest = async () => {
     const record = loadKey(route.providerId);
@@ -128,14 +132,26 @@ function TaskRow({ taskId, onChanged }: { taskId: AiTaskId; onChanged: () => voi
     const signal = new AbortController().signal;
     try {
       if (def.capability === 'text') {
+        // a tiny real request with the selected model — this is itself a
+        // generation, so a model-access failure updates the chip the same
+        // way a real "Generate from brief" failure would
         await testTextModel(route.model, record.key, signal);
+        clearModelAccessDenied(taskId);
         setTest({ status: 'ok' });
       } else {
+        // never a billed generation — this can only prove the key works and
+        // (best-effort) whether the model is listed, never prove access
         const listed = await verifyModelListed(route.model, record.key, signal);
-        setTest(listed ? { status: 'ok' } : { status: 'unverified', message: 'Not verified until first use.' });
+        setTest(
+          listed
+            ? { status: 'ok' }
+            : { status: 'unverified', message: 'Key OK, model access not verified until first use.' },
+        );
       }
     } catch (e) {
-      setTest({ status: 'error', message: e instanceof Error ? e.message : 'Test failed.' });
+      const err = toAiError(e);
+      if (isModelAccessError(err)) recordModelAccessDenied(taskId, route.model);
+      setTest({ status: 'error', message: [err.message, err.detail].filter(Boolean).join(' — ') });
     }
   };
 
@@ -158,10 +174,21 @@ function TaskRow({ taskId, onChanged }: { taskId: AiTaskId; onChanged: () => voi
     <div className="rounded-lg border border-slate-200 p-2.5">
       <div className="mb-2 flex items-center gap-2">
         <h4 className="flex-1 text-xs font-semibold text-slate-900">{def.label}</h4>
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[status]}`}>
-          {STATUS_LABEL[status]}
-        </span>
+        {denied ? (
+          <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800">
+            No access to {denied}
+          </span>
+        ) : (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[status]}`}>
+            {STATUS_LABEL[status]}
+          </span>
+        )}
       </div>
+      {denied && (
+        <p className="mb-2 text-[10px] leading-snug text-red-700">
+          Choose another model or enable this one in your OpenAI project's Allowed models.
+        </p>
+      )}
 
       <RouteModelPicker
         capability={def.capability}

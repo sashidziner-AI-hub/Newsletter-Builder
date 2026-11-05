@@ -20,6 +20,7 @@ import {
   toAiError,
 } from './provider';
 import { isConnected, loadKey } from './key-store';
+import { clearModelAccessDenied, recordModelAccessDenied } from './model-access';
 import { PROVIDERS } from './openai';
 import { TEXT_PROVIDERS } from './openai-text';
 import {
@@ -73,6 +74,22 @@ export function currentTaskModel(taskId: AiTaskId): string {
 }
 
 const FALLBACK_TRIGGER: ReadonlySet<AiErrorKind> = new Set(['network', 'timeout', 'rate-limit']);
+
+/**
+ * Small fix (2026-11-05): a 403 is always a model/permission refusal; a few
+ * providers answer an inaccessible model with a 404 "model_not_found"-style
+ * body instead, which `classify()` has nowhere better to put than
+ * `'bad-response'` — so the message text is checked too, not just the kind.
+ * OpenAI's own real wording is "do not have access" (not "does"), e.g. "The
+ * model `x` does not exist or you do not have access to it." — matched with
+ * `do(?:es)?` so either phrasing hits.
+ */
+const MODEL_ACCESS_PATTERN = /\bdo(?:es)? not have access\b|access to (this |the )?model|model_not_found/i;
+
+export function isModelAccessError(err: AiError): boolean {
+  if (err.kind === 'forbidden') return true;
+  return MODEL_ACCESS_PATTERN.test(`${err.message} ${err.detail}`);
+}
 
 async function callAdapter(
   def: AiTaskDef,
@@ -148,9 +165,12 @@ export async function runTask<T extends AiTaskId>(
       const record = loadKey(candidate.providerId);
       if (!record || !isConnected(candidate.providerId)) continue;
       try {
-        return (await callAdapter(def, candidate, record.key, route.options, input)) as TaskIOMap[T]['output'];
+        const result = (await callAdapter(def, candidate, record.key, route.options, input)) as TaskIOMap[T]['output'];
+        clearModelAccessDenied(taskId);
+        return result;
       } catch (e) {
         const err = toAiError(e);
+        if (isModelAccessError(err)) recordModelAccessDenied(taskId, candidate.model);
         if (!FALLBACK_TRIGGER.has(err.kind)) throw err;
         lastError = err;
       }

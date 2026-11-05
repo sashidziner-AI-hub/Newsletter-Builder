@@ -1690,3 +1690,73 @@ generation endpoint; the key absent from a thrown error even when the provider e
 every Settings-hub task row rendering with the right default and status; and the live, manual
 cross-component check (New email's "Generate from brief" → Open AI settings → lands on Settings
 > AI with the right section open).
+
+## Feature 6B — amendment: fixed defaults and a model-access status chip — done (2026-11-05)
+
+### The defaults were overridden without being asked to be
+
+6B's own research found `gpt-6-luna`/`gpt-image-2.6-flare` to be the current, verified-working
+model ids and defaulted to them instead of the brief's literal `gpt-4.1-mini`/`gpt-image-2` —
+flagged and confirmed with the user at the time. This amendment reverses that: **a default must
+only ever be a model the user actually chose**, newest-available or not. `AI_TASKS['text.brief']
+.defaultModel` is `'gpt-4.1-mini'`, `AI_TASKS['image.generate'].defaultModel` is `'gpt-image-2'`
+— both still fully selectable models in `OPENAI_TEXT_MODELS`/`OPENAI_MODELS`, neither removed,
+just no longer what a fresh install or "Reset to defaults" lands on. The newer ids stay listed
+in the dropdown; a task's own route (never array position) has been the one thing that decides
+"the default" since 6B, so this was a one-line change per task, not a redesign.
+
+### A task now tells you when its model, specifically, is the problem
+
+Previously every refusal just surfaced as a generic error in the chat/composer. Now
+`src/lib/ai/model-access.ts` keeps a small session-only, per-task record of "this model was
+just refused," and `run-task.ts`'s `isModelAccessError()` recognizes it from either signal the
+brief named: a `403`, classified as `'forbidden'` already, or — since OpenAI answers an
+inaccessible model with a `404` "model_not_found"-style body just as often, which `classify()`
+has nowhere better to put than the generic `'bad-response'` kind — the message text itself
+(`"do not have access"`/`"does not have access"`, matched for both of OpenAI's own phrasings,
+plus `"access to model"`/`model_not_found`). `runTask()` records the denial on a matching
+failure and clears it on the next success, for **both** capabilities — the same shared loop
+already runs regardless of text or image, so this needed no capability-specific wiring.
+
+Settings > AI's status chip reads `deniedModelFor(taskId, route.model)` on every render (same
+"don't memoize, this is cheap and staleness is a correctness bug" rule the rest of 6B's UI
+already follows) and swaps **"Connected"** for **"No access to `<model>`"** plus the hint
+*"Choose another model or enable this one in your OpenAI project's Allowed models."* the moment
+it matches. "Clear it when the model is changed" needed no explicit clear call at all: the
+record is keyed to a specific model string, so switching away just stops it matching — and
+switching back re-shows it, which is the more honest behaviour (a model denied five minutes ago
+is probably still denied, not a blank slate).
+
+### Test connection, tightened to match the brief's own split
+
+Text already made a real, tiny, selected-model request (`testTextModel`, unchanged) — it now
+also runs through the exact same `isModelAccessError`/record/clear logic a real generation
+does, and a failure shows `message` **and** `detail` together rather than message alone, which
+is what "show the exact error" meant here. Image still never generates — `verifyModelListed`
+is unchanged — but its "model isn't listed" message is now the literal requested text: **"Key
+OK, model access not verified until first use."**, replacing the looser "Not verified until
+first use." from 6B's first pass.
+
+### Security
+
+Unchanged: `isModelAccessError` only ever inspects `AiError.message`/`.detail`, both of which
+already passed through `redactKeys()` inside each adapter's `classify()` before the error was
+constructed — this fix adds no new path a key could reach, only a new read of text that was
+already safe.
+
+### Tests
+
+New: `ai-model-access.test.ts` (11 — the denial record's match/clear/switch-back behaviour,
+`isModelAccessError` against both OpenAI phrasings and a `model_not_found` body, and `runTask`
+recording/clearing a denial on a real mocked 403/success). Plus 4 more in the existing
+`ai-tasks.test.ts` (the exact chosen defaults) and `ai-task-ui.test.tsx` (the image "Key OK…"
+message, the text chip flipping to "No access to gpt-4.1-mini" with the hint visible, and the
+chip clearing on a model change then recovering to "Connected" on a later successful test) —
+**15 new**. One existing assertion per touched default (`ai-ui.test.tsx`, `ai-task-ui.test.tsx`
+×6, `ai-run-task.test.ts` ×2) updated to the restored literal ids; `ai.test.ts`'s and
+`brief-generate.test.ts`'s own model-*list* assertions (`OPENAI_MODELS[0]`/
+`OPENAI_TEXT_MODELS[0]`) were untouched, since array order was never the default and this fix
+didn't reorder either list. Full suite: **950 passing**, `tsc --noEmit` clean — no dedicated
+lint script exists in this repo, `tsc --noEmit` is the only static-analysis gate and was run
+throughout, not just at the end. No real API calls anywhere — mocked `fetch`, same as every
+other AI test file.
