@@ -428,7 +428,10 @@ describe('loading what was saved before 3B', () => {
     brand.darkTokens = deriveDarkColors(brand.tokens.colors);
     const again = normalizeBrand(JSON.parse(JSON.stringify(brand)))!;
     expect(again.darkTokens).toEqual(brand.darkTokens);
-    expect(again.schemaVersion).toBe(2);
+    // BRAND_SCHEMA_VERSION bumped 2 -> 3 in 6A (added `voice`); a freshly-built
+    // brand round-trips at the current version, not the version this test was
+    // first written against.
+    expect(again.schemaVersion).toBe(3);
   });
 
   it('gives an email saved before 3B dark support rather than silence', () => {

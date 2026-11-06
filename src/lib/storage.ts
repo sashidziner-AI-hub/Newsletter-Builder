@@ -1,5 +1,7 @@
 import type { Brand, Design } from '../types';
 import { normalizeBrand, veeBrand } from './brand';
+import { type BriefRecord, normalizeBriefRecord } from './ai/brief-types';
+import { getCurrentUser } from './user';
 import { type SavedBlock, normalizeSavedBlock } from './blocks-library';
 import { type LibraryImage, normalizeLibraryImage } from './image-storage';
 import { normalizeDesign } from './design-ops';
@@ -50,6 +52,8 @@ export interface SavedTemplate {
   createdBy: string | null;
   updatedBy: string | null;
   schemaVersion: number;
+  /** set when this email was generated from a brief (6A); null for a hand-built one */
+  brief: BriefRecord | null;
 }
 
 function read<T>(key: string): T | null {
@@ -126,28 +130,36 @@ export function saveDraft(design: Design): boolean {
   return write(DRAFT_KEY, design);
 }
 
+/** Exported so a full-backup import (7A) can normalize each record the same way a normal load does. */
+export function normalizeTemplate(raw: unknown): SavedTemplate | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  const design = normalizeDesign(t.design);
+  if (!design || typeof t.id !== 'string') return null;
+  const updatedAt = Number(t.updatedAt) || 0;
+  return {
+    id: t.id,
+    name: typeof t.name === 'string' ? t.name : 'Untitled',
+    updatedAt,
+    createdAt: Number(t.createdAt) || updatedAt,
+    brandId: design.brandId,
+    design,
+    // absent on pre-2B records, which were all saved on purpose
+    autoSaved: t.autoSaved === true,
+    createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
+    updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
+    schemaVersion: Number(t.schemaVersion) || 1,
+    brief: normalizeBriefRecord(t.brief),
+  };
+}
+
 export function listTemplates(): SavedTemplate[] {
-  const raw = read<Record<string, unknown>[]>(TEMPLATES_KEY);
+  const raw = read<unknown[]>(TEMPLATES_KEY);
   if (!Array.isArray(raw)) return [];
   const out: SavedTemplate[] = [];
   for (const t of raw) {
-    const design = normalizeDesign(t?.design);
-    if (design && typeof t.id === 'string') {
-      const updatedAt = Number(t.updatedAt) || 0;
-      out.push({
-        id: t.id,
-        name: typeof t.name === 'string' ? t.name : 'Untitled',
-        updatedAt,
-        createdAt: Number(t.createdAt) || updatedAt,
-        brandId: design.brandId,
-        design,
-        // absent on pre-2B records, which were all saved on purpose
-        autoSaved: t.autoSaved === true,
-        createdBy: typeof t.createdBy === 'string' ? t.createdBy : null,
-        updatedBy: typeof t.updatedBy === 'string' ? t.updatedBy : null,
-        schemaVersion: Number(t.schemaVersion) || 1,
-      });
-    }
+    const template = normalizeTemplate(t);
+    if (template) out.push(template);
   }
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -155,6 +167,11 @@ export function listTemplates(): SavedTemplate[] {
 export function findTemplate(id: string | null): SavedTemplate | null {
   if (!id) return null;
   return listTemplates().find((t) => t.id === id) ?? null;
+}
+
+/** Bulk replace, for restoring a full backup (7A) — every other write goes through `saveEmail`. */
+export function saveTemplates(templates: SavedTemplate[]): WriteResult {
+  return writeSafe(TEMPLATES_KEY, templates);
 }
 
 function putTemplate(entry: SavedTemplate): { entry: SavedTemplate; result: WriteResult } {
@@ -169,6 +186,8 @@ export interface SaveOptions {
   /** false marks the record as a deliberate save rather than an auto-save */
   autoSaved?: boolean;
   name?: string;
+  /** set once, on the save that follows Create from a brief; every later autosave keeps it */
+  brief?: BriefRecord | null;
 }
 
 /**
@@ -190,9 +209,10 @@ export function saveEmail(
     brandId: design.brandId,
     design,
     autoSaved: opts.autoSaved ?? previous?.autoSaved ?? true,
-    createdBy: previous?.createdBy ?? null,
-    updatedBy: null,
+    createdBy: previous?.createdBy ?? getCurrentUser().name,
+    updatedBy: getCurrentUser().name,
     schemaVersion: SCHEMA_VERSION,
+    brief: opts.brief ?? previous?.brief ?? null,
   };
   return putTemplate(entry);
 }
@@ -211,6 +231,20 @@ export function renameTemplate(id: string, name: string): SavedTemplate | null {
     ...existing,
     name: name.trim() || existing.name,
     autoSaved: false,
+    updatedAt: Date.now(),
+    schemaVersion: SCHEMA_VERSION,
+  };
+  const { result } = putTemplate(entry);
+  return result === 'full' ? null : entry;
+}
+
+/** Flip the "AI draft" reviewed flag (6A) — a no-op when the record has no brief. */
+export function updateBriefReviewed(id: string, reviewed: boolean): SavedTemplate | null {
+  const existing = findTemplate(id);
+  if (!existing?.brief) return null;
+  const entry: SavedTemplate = {
+    ...existing,
+    brief: { ...existing.brief, reviewed },
     updatedAt: Date.now(),
     schemaVersion: SCHEMA_VERSION,
   };
@@ -316,6 +350,11 @@ export function listVersions(): VersionRecord[] {
     }
   }
   return out.sort((a, b) => b.at - a.at);
+}
+
+/** Bulk replace, for restoring a full backup (7A) — every other write goes through `addVersion`. */
+export function saveVersions(versions: VersionRecord[]): WriteResult {
+  return writeSafe(VERSIONS_KEY, versions);
 }
 
 /**
@@ -433,4 +472,9 @@ export function saveIgnored(emailId: string | null, ids: string[]): WriteResult 
   if (ids.length > 0) byEmail[emailId] = ids;
   else delete byEmail[emailId];
   return writeSafe(IGNORED_KEY, { byEmail, schemaVersion: SCHEMA_VERSION });
+}
+
+/** Reset every email's dismissed-warnings list at once (7A's Checks settings section). */
+export function clearAllIgnored(): WriteResult {
+  return writeSafe(IGNORED_KEY, { byEmail: {}, schemaVersion: SCHEMA_VERSION });
 }

@@ -61,6 +61,10 @@ export interface CheckOptions {
    * rule the broken-image check follows.
    */
   knownDrafts?: Set<string>;
+  /** 6A: this email was generated from a brief — drives AI_DRAFT_UNREVIEWED. */
+  hasBrief?: boolean;
+  /** 6A: "Mark as reviewed" has been pressed for this email's brief. */
+  briefReviewed?: boolean;
 }
 
 const KB = 1024;
@@ -324,6 +328,37 @@ export function classifyLink(url: string): LinkVerdict {
   const host = value.replace(/^https:\/\//i, '').split('/')[0].toLowerCase();
   if (PLACEHOLDER_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))) return 'placeholder';
   return 'ok';
+}
+
+/**
+ * A missing-fact placeholder the brief prompt asks the model to write, such
+ * as `[add date]` (6A). Deliberately excludes keys that never hold brief
+ * copy — href/src/id fields — and the `[% ... %]` merge-tag bracket format,
+ * which is a real token, not a missing fact.
+ */
+const BRACKET_RE = /\[[^[\]\n]{1,80}\]/g;
+const NON_CONTENT_FIELD_RE = /href|src|^id$|^aiDraftId$/i;
+
+function bracketPlaceholders(block: Block): { field: string; text: string }[] {
+  const holders: Record<string, unknown>[] = [block.values as unknown as Record<string, unknown>];
+  for (const key of ['items', 'cards']) {
+    const arr = (block.values as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(arr)) {
+      for (const item of arr) if (item && typeof item === 'object') holders.push(item as Record<string, unknown>);
+    }
+  }
+
+  const out: { field: string; text: string }[] = [];
+  for (const holder of holders) {
+    for (const [field, value] of Object.entries(holder)) {
+      if (typeof value !== 'string' || NON_CONTENT_FIELD_RE.test(field)) continue;
+      for (const match of value.matchAll(BRACKET_RE)) {
+        if (match[0].startsWith('[%')) continue; // the `[% tag %]` merge-tag format
+        out.push({ field, text: match[0] });
+      }
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------- engine */
@@ -699,6 +734,35 @@ export function checkDesign(
   /* ---- IMAGES, absorbed from 2C-1 so there is one source of truth */
   for (const use of imageUses) {
     issues.push(...imageIssues(use, opts));
+  }
+
+  /* ---- AI BRIEF (6A) */
+  if (opts.hasBrief && !opts.briefReviewed) {
+    add({
+      id: id('AI_DRAFT_UNREVIEWED', undefined, 'email'),
+      code: 'AI_DRAFT_UNREVIEWED',
+      severity: 'warning',
+      message: 'This email was generated from a brief and has not been reviewed yet.',
+      hint: 'Read it through — AI can misstate a fact or miss the tone — then mark it reviewed.',
+      action: 'Mark as reviewed',
+    });
+  }
+
+  for (const row of design.rows) {
+    for (const col of row.columns) {
+      for (const block of col.blocks) {
+        for (const { field, text } of bracketPlaceholders(block)) {
+          add({
+            id: id('BRIEF_PLACEHOLDER_LEFT', block.id, `${field}:${text}`),
+            code: 'BRIEF_PLACEHOLDER_LEFT',
+            severity: 'warning',
+            message: `A placeholder, ${text}, is still in the copy.`,
+            hint: 'The brief did not give this fact — fill it in before sending.',
+            blockId: block.id,
+          });
+        }
+      }
+    }
   }
 
   return issues.sort(

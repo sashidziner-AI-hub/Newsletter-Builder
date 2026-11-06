@@ -528,6 +528,17 @@ export interface BrandSocialLink {
   url: string;
 }
 
+/**
+ * How a brand should sound when AI writes copy for it (6A). Optional — a brand
+ * with no voice set just gets no voice guidance in the prompt, nothing else
+ * changes.
+ */
+export interface BrandVoice {
+  description: string;
+  wordsToUse: string[];
+  wordsToAvoid: string[];
+}
+
 export interface Brand {
   id: string;
   name: string;
@@ -542,6 +553,8 @@ export interface Brand {
   tokens: BrandTokens;
   /** null means "derive one"; see BrandDarkColors */
   darkTokens: BrandDarkColors | null;
+  /** null means "no voice guidance set"; see BrandVoice (6A) */
+  voice: BrandVoice | null;
   footer: BrandFooter;
   social_links: BrandSocialLink[];
   is_active: boolean;

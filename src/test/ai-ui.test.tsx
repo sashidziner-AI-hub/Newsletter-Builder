@@ -12,6 +12,7 @@ import { useEditor } from '../store';
 import { veeBrand } from '../lib/brand';
 import { checkDesign } from '../lib/checks';
 import { clearAllKeys, AI_KEYS_STORAGE_KEY } from '../lib/ai/key-store';
+import { resetGuardsForTests } from '../lib/ai/run-task';
 import { draftStore } from '../lib/drafts';
 import { createBlock, createRow, emptyDesign } from '../lib/defaults';
 import { normalizeDesign } from '../lib/design-ops';
@@ -46,6 +47,7 @@ const fetchMock = vi.fn();
 beforeEach(() => {
   localStorage.clear();
   clearAllKeys();
+  resetGuardsForTests(); // 6B: run-task.ts's per-task guard is module-level, so it must be reset between tests
   vi.stubGlobal('fetch', fetchMock);
   fetchMock.mockReset();
   // jsdom has neither of these
@@ -390,12 +392,13 @@ describe('style presets', () => {
     );
   });
 
-  it('sends the chosen quality and the new default model', async () => {
+  it('sends the chosen quality and the task-configured model', async () => {
     await ready();
     fireEvent.change(screen.getByLabelText('Image quality'), { target: { value: 'low' } });
     await send('a quiet office');
 
     expect(lastBody().quality).toBe('low');
+    // 6B: the image.generate task's default, not a provider-level "active model" anymore
     expect(lastBody().model).toBe('gpt-image-2');
   });
 });

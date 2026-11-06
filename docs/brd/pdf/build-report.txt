@@ -1,0 +1,8 @@
+docs-to-pdf report — 2026-11-06T08:43:11.551Z
+Source folder: docs/brd
+Output: docs\brd\pdf\BRD.pdf
+Pages: 127
+Mermaid diagrams found: 15
+Rendered: 15
+Failed: 0
+Rebuild with: node scripts/docs-to-pdf/index.mjs docs/brd
