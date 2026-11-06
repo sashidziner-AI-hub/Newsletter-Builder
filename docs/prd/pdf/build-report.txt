@@ -1,0 +1,13 @@
+docs-to-pdf report — 2026-11-06T08:46:29.401Z
+Source folder: docs/prd
+Output: docs\prd\pdf\PRD.pdf
+Pages: 82
+Mermaid diagrams found: 6
+Rendered: 5
+Failed: 1
+  - docs/prd/PRD-03-flows-and-requirements.md:11 — Parse error on line 6:
+Auto-fix succeeded on 1 of the failed diagram(s) (NOT applied to the PDF or any .md file):
+  - docs/prd/PRD-03-flows-and-requirements.md:11
+    original: "flowchart TD\n    A[TopBar: New] --> B[NewEmailModal opens, Presets tab]\n    B --> C[Pick a brand in the dialog header]\n    C --> D[Thumbnails re-render themed with that brand]\n    D --> E{Pick Blank or a preset card}\n    E -->|dirty design exists| F[Confirm: \"A change from the last couple of seconds may not be saved yet\"]\n    F -->|confirmed| G\n    E -->|not dirty| G[snapshot pre-replace; preset.build(brand) or emptyDesign()]\n    G --> H[applyEmailDefaults overlays org-wide defaults]\n    H --> I[startNewEmail - currentEmailId = null]\n    I --> J[Canvas shows the new design; modal closes]\n    J --> K[First edit triggers auto-save, minting a new SavedTemplate]\n"
+    fixed:    "flowchart TD\n    A[TopBar: New] --> B[NewEmailModal opens, Presets tab]\n    B --> C[Pick a brand in the dialog header]\n    C --> D[Thumbnails re-render themed with that brand]\n    D --> E{Pick Blank or a preset card}\n    E -->|dirty design exists| F[Confirm: 'A change from the last couple of seconds may not be saved yet']\n    F -->|confirmed| G\n    E -->|not dirty| G[\"snapshot pre-replace; preset.build(brand) or emptyDesign()\"]\n    G --> H[applyEmailDefaults overlays org-wide defaults]\n    H --> I[startNewEmail - currentEmailId = null]\n    I --> J[Canvas shows the new design; modal closes]\n    J --> K[First edit triggers auto-save, minting a new SavedTemplate]\n"
+Rebuild with: node scripts/docs-to-pdf/index.mjs docs/prd

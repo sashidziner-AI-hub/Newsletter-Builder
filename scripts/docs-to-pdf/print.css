@@ -1,0 +1,178 @@
+/* Print stylesheet for scripts/docs-to-pdf — shared by every generated doc PDF. */
+
+@page {
+  size: A4;
+  margin: 20mm;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: Arial, Helvetica, "Segoe UI", sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------------- cover */
+.cover-page {
+  box-sizing: border-box;
+  width: 100%;
+  height: 257mm; /* A4 height minus top+bottom 20mm margins */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  break-after: page;
+  page-break-after: always;
+}
+.cover-inner { max-width: 140mm; }
+.cover-kicker {
+  font-size: 11pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #666;
+  margin: 0 0 8mm 0;
+}
+.cover-doctitle {
+  font-size: 26pt;
+  font-weight: 700;
+  margin: 0 0 4mm 0;
+  color: #111;
+}
+.cover-appname {
+  font-size: 16pt;
+  font-weight: 500;
+  margin: 0 0 14mm 0;
+  color: #333;
+}
+.cover-meta {
+  font-size: 11pt;
+  color: #555;
+  margin: 0 0 2mm 0;
+}
+.cover-generated {
+  margin-top: 10mm;
+  font-size: 10pt;
+  font-style: italic;
+  color: #777;
+}
+
+/* ------------------------------------------------------------- headings */
+h1, h2, h3, h4, h5, h6 {
+  break-after: avoid-page;
+  page-break-after: avoid;
+  font-family: Arial, Helvetica, "Segoe UI", sans-serif;
+  color: #111;
+}
+h2 {
+  font-size: 16pt;
+  border-bottom: 1.5pt solid #ccc;
+  padding-bottom: 2mm;
+  margin-top: 9mm;
+}
+/* Only true top-level sections ("## N. Title", the appendix heading) force a
+   fresh page — structural dividers (Part headers, TOC, etc.) just flow. */
+h2.section-start {
+  break-before: page;
+  page-break-before: always;
+  margin-top: 0;
+}
+h3 { font-size: 13pt; margin-top: 7mm; }
+h4 { font-size: 11.5pt; margin-top: 5mm; }
+p { margin: 0 0 3mm 0; }
+
+/* ----------------------------------------------------------------- toc */
+.toc a, a { color: #1a4fa0; text-decoration: none; }
+.toc a { display: inline-block; }
+
+/* -------------------------------------------------------------- tables */
+table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 4mm 0 5mm 0;
+  font-size: 9pt;
+  break-inside: auto;
+}
+thead { display: table-header-group; } /* repeats header row across page breaks */
+tr { break-inside: avoid; page-break-inside: avoid; }
+th, td {
+  border: 0.5pt solid #bbb;
+  padding: 1.5mm 2.5mm;
+  text-align: left;
+  vertical-align: top;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+th {
+  background: #eef2f7;
+  font-weight: 700;
+}
+tbody tr:nth-child(even) { background: #fafbfc; }
+
+/* ----------------------------------------------------------- blockquote */
+blockquote {
+  margin: 4mm 0;
+  padding: 2mm 4mm;
+  border-left: 3pt solid #9bb6d6;
+  background: #f4f7fb;
+  color: #333;
+  font-size: 9.5pt;
+}
+blockquote p { margin: 0 0 1.5mm 0; }
+
+/* ---------------------------------------------------------------- code */
+code {
+  font-family: "Consolas", "SF Mono", Menlo, monospace;
+  font-size: 9pt;
+  background: #f1f1f1;
+  padding: 0.5pt 1.5pt;
+  border-radius: 2pt;
+}
+pre {
+  background: #f6f6f6;
+  border: 0.5pt solid #ddd;
+  border-radius: 2pt;
+  padding: 3mm;
+  font-size: 8.5pt;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+pre code { background: none; padding: 0; }
+
+/* -------------------------------------------------------------- lists */
+ul, ol { margin: 0 0 3mm 0; padding-left: 5mm; }
+li { margin: 0.8mm 0; }
+.task-list-item { list-style: none; margin-left: -5mm; }
+.task-list-item input[type="checkbox"] { margin-right: 2mm; }
+
+/* --------------------------------------------------------- mermaid diagrams */
+.diagram-page {
+  break-before: page;
+  page-break-before: always;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  text-align: center;
+  padding: 8mm 0;
+}
+.diagram-page svg {
+  max-width: 100%;
+  height: auto;
+}
+.diagram-failed {
+  text-align: left;
+}
+.diagram-note {
+  color: #a33;
+  font-weight: 700;
+  font-size: 10pt;
+  margin-bottom: 3mm;
+}
+
+hr { border: none; border-top: 0.5pt solid #ccc; margin: 5mm 0; }

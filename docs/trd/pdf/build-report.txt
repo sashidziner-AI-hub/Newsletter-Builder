@@ -1,0 +1,8 @@
+docs-to-pdf report — 2026-11-06T09:10:51.828Z
+Source folder: docs/trd
+Output: docs\trd\pdf\TRD.pdf
+Pages: 50
+Mermaid diagrams found: 6
+Rendered: 6
+Failed: 0
+Rebuild with: node scripts/docs-to-pdf/index.mjs docs/trd
